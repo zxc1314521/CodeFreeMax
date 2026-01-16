@@ -14,7 +14,7 @@
 
 ## 项目展示
 
-![Kiro2API 首页](home.png)
+![Kiro2API 首页](home.png?v=123)
 
 ## 📡 API 端点
 
