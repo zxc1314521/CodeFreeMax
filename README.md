@@ -1,8 +1,58 @@
 # Kiro2API 部署指南
 
+将 Kiro AI 转换为标准 API 服务，支持 Claude 和 OpenAI 兼容协议。
+
+## ✨ 功能特性
+
+- 🔄 **多协议支持** - 同时支持 Claude `/v1/messages` 和 OpenAI `/v1/chat/completions` 端点
+- 🌐 **代理池支持** - 支持 HTTP/HTTPS/SOCKS5 代理，可配置代理池轮询
+- 🔑 **Session 派生** - 代理地址支持 `%s` 占位符，自动替换为账号唯一 Session ID，实现 IP 隔离
+- ⚖️ **负载均衡** - 多账号随机分配，自动跳过异常账号
+- 🔁 **自动重试** - 可配置重试次数、延迟和验证码重试
+- 💾 **数据持久化** - SQLite 数据库存储，方便备份迁移
+
 ## 项目展示
 
 ![Kiro2API 首页](home.png)
+
+## 📡 API 端点
+
+### Claude 协议 (`/v1/messages`)
+
+```bash
+curl -X POST http://localhost:8000/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: YOUR_API_KEY" \
+  -d '{
+    "model": "claude-sonnet-4-20250514",
+    "max_tokens": 4096,
+    "stream": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello, who are you?"
+      }
+    ]
+  }'
+```
+
+### OpenAI 协议 (`/v1/chat/completions`)
+
+```bash
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{
+    "model": "claude-sonnet-4-20250514",
+    "stream": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello, who are you?"
+      }
+    ]
+  }'
+```
 
 ## 快速开始
 
