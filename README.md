@@ -4,7 +4,9 @@
 
 ## 🎉 V2.0.0 更新说明
 
-> ⚠️ **重要提示**: 更新到 V2.0.0 版本后，AugmentCode 插件需要重新下载安装！
+> ⚠️ **重要提示**: 
+> 1. 更新到 V2.0.0 版本及以后，AugmentCode 插件需要重新下载安装！
+> 2. API 端点格式已变更为 `http://localhost:8000/{渠道}/v1`，如 `/kiro/v1` 或 `/antigravity/v1`
 
 ### 新增功能
 
@@ -34,10 +36,34 @@
 
 ## 📡 API 端点
 
-### Claude 协议 (`/v1/messages`)
+API 地址格式：`http://localhost:8000/{渠道}/v1`
+
+| 渠道 | API 地址 |
+|------|----------|
+| Kiro | `http://localhost:8000/kiro/v1` |
+| Antigravity | `http://localhost:8000/antigravity/v1` |
+
+### Claude 协议 (`/{渠道}/v1/messages`)
 
 ```bash
-curl -X POST http://localhost:8000/v1/messages \
+# Kiro 渠道
+curl -X POST http://localhost:8000/kiro/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: YOUR_API_KEY" \
+  -d '{
+    "model": "claude-sonnet-4-20250514",
+    "max_tokens": 4096,
+    "stream": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello, who are you?"
+      }
+    ]
+  }'
+
+# Antigravity 渠道
+curl -X POST http://localhost:8000/antigravity/v1/messages \
   -H "Content-Type: application/json" \
   -H "x-api-key: YOUR_API_KEY" \
   -d '{
@@ -53,10 +79,26 @@ curl -X POST http://localhost:8000/v1/messages \
   }'
 ```
 
-### OpenAI 协议 (`/v1/chat/completions`)
+### OpenAI 协议 (`/{渠道}/v1/chat/completions`)
 
 ```bash
-curl -X POST http://localhost:8000/v1/chat/completions \
+# Kiro 渠道
+curl -X POST http://localhost:8000/kiro/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{
+    "model": "claude-sonnet-4-20250514",
+    "stream": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello, who are you?"
+      }
+    ]
+  }'
+
+# Antigravity 渠道
+curl -X POST http://localhost:8000/antigravity/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{
