@@ -1,77 +1,36 @@
-# CodeFreeMax 部署指南
+# CodeFreeMax
 
-🚀 将 Kiro、Antigravity、Warp、Orchids 等 IDE 转换为兼容 OpenAI/Claude/Augment Code 格式的 API 服务。
+🚀 将 Kiro、Antigravity、Warp、Orchids、Grok 等 IDE/服务转换为兼容 OpenAI / Claude / Augment Code 格式的 API 服务。
 
-## 🎉 V2.6.0 更新说明
-
-> ⚠️ **重要提示**:
-> 1. 公共授权码：`144bd7a0-6ca2-4b7e-ac1c-1a29afb50662`
-
-### 新增功能
-
-- 🤖 **Grok 渠道支持** - 新增 Grok 渠道，纯 OpenAI 对话协议，免费使用！
-
-## 🎉 V2.3.0 更新说明
-
-> ⚠️ **重要提示**:
-> 1. 更新到 V2.3.0 版本，AugmentCode 插件需要更新到 **v3.0.0**！
-
-### 新增功能
-
-- 🧠 **ClaudeCode 上下文多轮自动压缩** - 在 ClaudeCode 中实现 Kiro 反代上下文多轮自动压缩！超长上下文会话不丢失、不卡顿
-  - 实测大项目读取修改、深度分析、大量修改，全自动整合多轮上下文摘要
-  - 同一窗口会话上下文不丢失！
-  - ⚠️ **注意**: 仅支持 ClaudeCode
-- 🔌 **AugmentCode 插件 v3.0.0** - 插件同步更新，支持上下文压缩功能（需要程序版本 ≥ v2.3.2）
-
-## 🎉 V2.2.0 更新说明
-
-### 新增功能
-
-- 🌐 **Warp Claude 协议支持** - Warp 渠道现已支持 Claude 协议，功能更完整
-- 🌸 **Orchids 协议完全重构** - 全面重构 Orchids 协议实现，性能和稳定性大幅提升
-- 🎨 **前端界面重构** - 全新的管理界面，操作更直观，体验更流畅
-
-## 🎉 V2.1.8 更新说明
-
-### 新增功能
-
-- 🌸 **Orchids 渠道支持** - 新增 Orchids 渠道，支持满血 Orchids 代理，破甲功能，完整工具调用能力，不会再误认为自己是 Next.js 项目（⚠️ 该渠道不免费）
-
-## 🎉 V2.1.0 更新说明
-
-### 新增功能
-
-- 🌐 **Warp 渠道支持** - 新增 Warp 渠道，支持 OpenAI 对话格式
-
-## 🎉 V2.0.0 更新说明
-
-> ⚠️ **重要提示**:
-> 1. 更新到 V2.0.0 版本及以后，AugmentCode 插件需要重新下载安装！
-> 2. API 端点格式已变更为 `http://localhost:8000/{渠道}/v1`，如 `/kiro/v1` 或 `/antigravity/v1`
-
-### 新增功能
-
-- 🌌 **反重力（Antigravity）渠道** - 新增 Antigravity 渠道支持，可在 Kiro 和 Antigravity 之间自由切换
-- 🎛️ **按渠道配置代理** - 代理配置支持按渠道独立设置，每个渠道可以使用不同的代理
-- 📋 **模型自定义管理** - 全新的模型管理功能，支持自定义返回的模型列表、名称映射、启用/禁用、排序等
-- 🔌 **AugmentCode 插件全面优化** - 插件体验大幅提升，兼容性更好
+> 公共授权码：`144bd7a0-6ca2-4b7e-ac1c-1a29afb50662`
 
 ## ✨ 功能特性
 
-- 🚀 **Augment Code 支持** - 完美支持反代 Augment Code，已处理大部分兼容性问题
-  - ⭐ **推荐使用 Kiro 渠道**: AugmentCode 目前仅 Kiro 完美适配，其他渠道可能存在兼容性问题
-- 🔄 **多协议支持** - 同时支持 Claude `/v1/messages` 和 OpenAI `/v1/chat/completions` 端点
-- 🌌 **多渠道支持** - 支持 Kiro、Antigravity、Warp、Orchids 和 Grok 五渠道，可独立管理
-  - **Claude 协议**: 支持 Kiro、Antigravity、Warp 和 Orchids 渠道
-  - **OpenAI 格式**: 所有渠道均支持
-  - **Grok 渠道**: 纯 OpenAI 对话协议，免费使用
-- 🌐 **代理池支持** - 支持 HTTP/HTTPS/SOCKS5 代理，可按渠道配置独立代理
-- 🔑 **Session 派生** - 代理地址支持 `%s` 占位符，自动替换为账号唯一 Session ID，实现 IP 隔离
-- ⚖️ **负载均衡** - 多账号随机分配，自动跳过异常账号
-- 🔁 **自动重试** - 可配置重试次数、延迟和验证码重试
-- 📋 **模型管理** - 自定义模型列表、名称映射、状态管理
-- 💾 **数据持久化** - SQLite 数据库存储，方便备份迁移
+### 多渠道支持
+
+| 渠道 | Claude 协议 | OpenAI 协议 | 免费 | 备注 |
+|------|:-----------:|:-----------:|:----:|------|
+| Kiro | ✅ | ✅ | ❌ | ⭐ AugmentCode 推荐渠道 |
+| Antigravity | ✅ | ✅ | ✅ | 可与 Kiro 自由切换 |
+| Warp | ✅ | ✅ | ❌ | |
+| Orchids | ✅ | ✅ | ❌ | ⚠️ 暂停出售 |
+| ClaudeCode | ✅ | — | ❌ | 仅支持 Claude 协议 |
+| Grok | — | ✅ | ✅ | 纯 OpenAI 协议 |
+
+- API 端点格式：`http://localhost:8000/{渠道}/v1`，如 `/kiro/v1`、`/antigravity/v1`
+
+### 核心能力
+
+- 🔄 **多协议** — 同时支持 Claude `/v1/messages` 和 OpenAI `/v1/chat/completions`
+- 🧠 **上下文自动压缩** — ClaudeCode 多轮对话自动压缩，超长会话不丢失、不卡顿
+- 🚀 **Augment Code 适配** — 完美反代 Augment Code，配合魔改插件使用
+- 🌐 **代理池** — 支持 HTTP/HTTPS/SOCKS5，可按渠道独立配置代理
+- 🔑 **Session 派生** — 代理地址支持 `%s` 占位符，自动替换为账号 Session ID，实现 IP 隔离
+- ⚖️ **负载均衡** — 多账号随机分配，自动跳过异常账号
+- 🔁 **自动重试** — 可配置重试次数、延迟和验证码重试
+- 📋 **模型管理** — 自定义模型列表、名称映射、启用/禁用、排序
+- 💾 **数据持久化** — SQLite 存储，方便备份迁移
+- 🎨 **管理界面** — 全新前端界面，操作直观
 
 ## 项目展示
 
