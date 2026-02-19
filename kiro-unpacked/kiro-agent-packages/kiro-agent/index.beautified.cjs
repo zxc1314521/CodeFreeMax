@@ -1,0 +1,313 @@
+"use strict";
+Object.defineProperty(exports, Symbol.toStringTag, {
+  value: "Module"
+});
+const m = require("./powers-BhbIVJw-.cjs"),
+  S = require("crypto"),
+  x = require("@kiro/shared"),
+  E = require("zod"),
+  M = require("os");
+
+function w(e) {
+  const r = Object.create(null, {
+    [Symbol.toStringTag]: {
+      value: "Module"
+    }
+  });
+  if (e) {
+    for (const n in e)
+      if (n !== "default") {
+        const t = Object.getOwnPropertyDescriptor(e, n);
+        Object.defineProperty(r, n, t.get ? t : {
+          enumerable: !0,
+          get: () => e[n]
+        })
+      }
+  }
+  return r.default = e, Object.freeze(r)
+}
+const p = w(E),
+  C = w(M);
+class N extends m.KiroError {
+  constructor(r = "Operation was aborted by user or system") {
+    super(r)
+  }
+  get userFacingSessionErrorMessage() {
+    return "Execution Aborted"
+  }
+  get userFacingFixCallback() {}
+}
+class A extends m.KiroError {
+  constructor() {
+    super("No workspace directory available for command execution")
+  }
+  get userFacingSessionErrorMessage() {
+    return "No workspace directory is available for command execution. Please open a workspace folder."
+  }
+  get userFacingFixCallback() {}
+}
+class h extends m.KiroError {
+  constructor(r) {
+    super(`Invalid values provided for the prompt template: ${r}`)
+  }
+  get userFacingSessionErrorMessage() {
+    return "Invalid Prompt Submitted - Please report a bug"
+  }
+  get userFacingFixCallback() {}
+}
+class v extends m.KiroError {
+  constructor(r, n) {
+    super(`Missing required keys: [${r.join(", ")}] in received object: ${JSON.stringify(n)}`)
+  }
+  get userFacingSessionErrorMessage() {
+    return "Missing required data"
+  }
+  get userFacingFixCallback() {}
+}
+class F extends m.KiroError {
+  constructor(r) {
+    super(`Unsupported model provider: '${r}' when trying to load model`)
+  }
+  get userFacingSessionErrorMessage() {
+    return "Unsupported model provider"
+  }
+  get userFacingFixCallback() {}
+}
+
+function y(e, r) {
+  var n = Object.keys(e);
+  if (Object.getOwnPropertySymbols) {
+    var t = Object.getOwnPropertySymbols(e);
+    r && (t = t.filter(function(o) {
+      return Object.getOwnPropertyDescriptor(e, o).enumerable
+    })), n.push.apply(n, t)
+  }
+  return n
+}
+
+function O(e) {
+  for (var r = 1; r < arguments.length; r++) {
+    var n = arguments[r] != null ? arguments[r] : {};
+    r % 2 ? y(Object(n), !0).forEach(function(t) {
+      k(e, t, n[t])
+    }) : Object.getOwnPropertyDescriptors ? Object.defineProperties(e, Object.getOwnPropertyDescriptors(n)) : y(
+      Object(n)).forEach(function(t) {
+      Object.defineProperty(e, t, Object.getOwnPropertyDescriptor(n, t))
+    })
+  }
+  return e
+}
+
+function k(e, r, n) {
+  return r = D(r), r in e ? Object.defineProperty(e, r, {
+    value: n,
+    enumerable: !0,
+    configurable: !0,
+    writable: !0
+  }) : e[r] = n, e
+}
+
+function D(e) {
+  var r = K(e, "string");
+  return typeof r == "symbol" ? r : String(r)
+}
+
+function K(e, r) {
+  if (typeof e != "object" || e === null) return e;
+  var n = e[Symbol.toPrimitive];
+  if (n !== void 0) {
+    var t = n.call(e, r);
+    if (typeof t != "object") return t;
+    throw new TypeError("@@toPrimitive must return a primitive value.")
+  }
+  return (r === "string" ? String : Number)(e)
+}
+const j = P({});
+
+function P(e) {
+  return r.withOptions = n => P(O(O({}, e), n)), r;
+
+  function r(n, ...t) {
+    const o = typeof n == "string" ? [n] : n.raw,
+      {
+        alignValues: u = !1,
+        escapeSpecialCharacters: c = Array.isArray(n),
+        trimWhitespace: l = !0
+      } = e;
+    let i = "";
+    for (let a = 0; a < o.length; a++) {
+      let s = o[a];
+      if (c && (s = s.replace(/\\\n[ \t]*/g, "").replace(/\\`/g, "`").replace(/\\\$/g, "$").replace(/\\\{/g, "{")), i +=
+        s, a < t.length) {
+        const g = u ? _(t[a], i) : t[a];
+        i += g
+      }
+    }
+    const d = i.split(`
+`);
+    let f = null;
+    for (const a of d) {
+      const s = a.match(/^(\s+)\S+/);
+      if (s) {
+        const g = s[1].length;
+        f ? f = Math.min(f, g) : f = g
+      }
+    }
+    if (f !== null) {
+      const a = f;
+      i = d.map(s => s[0] === " " || s[0] === "	" ? s.slice(a) : s).join(`
+`)
+    }
+    return l && (i = i.trim()), c && (i = i.replace(/\\n/g, `
+`)), i
+  }
+}
+
+function _(e, r) {
+  if (typeof e != "string" || !e.includes(`
+`)) return e;
+  const t = r.slice(r.lastIndexOf(`
+`) + 1).match(/^(\s+)/);
+  if (t) {
+    const o = t[1];
+    return e.replace(/\n/g, `
+${o}`)
+  }
+  return e
+}
+
+function T({
+  prompt: e,
+  keys: r
+}) {
+  const n = j(e).trim();
+  return {
+    format(t = {}) {
+      if (Object.keys(t).length !== r.length || Object.keys(t).some(o => !r.includes(o))) throw new h(
+        `Saw ${Object.keys(t).join(", ")}, expected ${r.join(", ")}`);
+      return q(n, t)
+    }
+  }
+}
+
+function U(e) {
+  const r = j(e).trim();
+  return {
+    format() {
+      return r
+    }
+  }
+}
+
+function $(e) {
+  return e.map(r => r.trim()).join(`
+
+`)
+}
+
+function q(e, r) {
+  const n = {};
+  for (const t of Object.keys(r)) {
+    const o = S.randomUUID();
+    n[t] = o, e = e.replaceAll(`{{${t}}}`, o)
+  }
+  for (const [t, o] of Object.entries(r)) e = e.replaceAll(n[t], o.toString());
+  return e
+}
+const I = new x.MetricReporter(m.TelemetryNamespace.Agent, "NumberCoercion");
+
+function R(e, r, n) {
+  if (!e || typeof e != "object") return e;
+  const t = {
+      ...e
+    },
+    o = r.shape;
+  let u = 0;
+  for (const [c, l] of Object.entries(o))
+    if (c in t) {
+      const i = t[c],
+        d = b(i, l);
+      d.wasCoerced && (t[c] = d.value, u++)
+    } return u > 0 && I.reportCountMetrics({
+    stringToNumberCoercions: u,
+    schemasProcessed: 1
+  }, {
+    operation: "stringToNumberCoercion",
+    toolId: n
+  }), t
+}
+
+function b(e, r) {
+  let n = r;
+  for (; n instanceof p.ZodOptional || n instanceof p.ZodNullable || n instanceof p.ZodDefault;) n = n._def.innerType;
+  if (n instanceof p.ZodNumber && typeof e == "string" && !isNaN(Number(e)) && e.trim() !== "") return {
+    value: Number(e),
+    wasCoerced: !0
+  };
+  if (n instanceof p.ZodArray && Array.isArray(e)) {
+    const t = n._def.type;
+    let o = !1;
+    return {
+      value: e.map(c => {
+        const l = b(c, t);
+        return l.wasCoerced && (o = !0), l.value
+      }),
+      wasCoerced: o
+    }
+  }
+  if (n instanceof p.ZodObject && e && typeof e == "object") {
+    const t = {
+      ...e
+    };
+    let o = !1;
+    const u = n.shape;
+    for (const [c, l] of Object.entries(u))
+      if (c in t) {
+        const i = b(t[c], l);
+        i.wasCoerced && (t[c] = i.value, o = !0)
+      } return {
+      value: t,
+      wasCoerced: o
+    }
+  }
+  return {
+    value: e,
+    wasCoerced: !1
+  }
+}
+
+function Z(e) {
+  let r = "";
+  const n = [];
+  for (const t of e)["text", "mention"].includes(t.type) && t.text && (r += t.text), t.type === "imageUrl" && t
+    .imageUrl && n.push(t.imageUrl.url);
+  return {
+    entireMessage: r,
+    imageBase64Urls: n
+  }
+}
+
+function V() {
+  const e = C.platform();
+  switch (e) {
+    case "win32":
+      return "Windows";
+    case "darwin":
+      return "macOS";
+    case "linux":
+      return "Linux";
+    default:
+      return e
+  }
+}
+exports.AgentAbortedException = N;
+exports.MissingRequiredKeysError = v;
+exports.PromptTemplateKeyError = h;
+exports.RunCommandNoWorkingDirectoryError = A;
+exports.UnsupportedModelProvider = F;
+exports.coerceNumbersInSchema = R;
+exports.getOperatingSystem = V;
+exports.joinPrompts = $;
+exports.parseMessagePartArray = Z;
+exports.promptTemplate = T;
+exports.rawPromptString = U;

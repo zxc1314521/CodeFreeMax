@@ -1,0 +1,18 @@
+server:
+  address: ":8080"
+  serverRoot: "."
+  logPath: "./logs"
+
+logger:
+  level: "all"
+  stdout: true
+
+database:
+  default:
+    type: "sqlite"
+    link: "sqlite:./data/kiro2api.db"
+
+redis:
+  default:
+    address: "127.0.0.1:6379"
+    db: 0

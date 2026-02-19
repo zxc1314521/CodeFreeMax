@@ -1,0 +1,19 @@
+"use strict";
+Object.defineProperty(exports, Symbol.toStringTag, {
+  value: "Module"
+});
+const mcpManager = require("../mcp-manager-DFdiTga3.cjs");
+exports.MCPConnection = mcpManager.MCPConnection;
+exports.MCPJsonConfigSchema = mcpManager.MCPJsonConfigSchema;
+exports.MCPManagerSingleton = mcpManager.MCPManagerSingleton;
+exports.MCPOptionsSchema = mcpManager.MCPOptionsSchema;
+exports.addMCPServerConfig = mcpManager.addMCPServerConfig;
+exports.addMCPToolToAutoApproveConfig = mcpManager.addMCPToolToAutoApproveConfig;
+exports.disableMCPTools = mcpManager.disableMCPTools;
+exports.enableMCPTools = mcpManager.enableMCPTools;
+exports.findConfigFileForServer = mcpManager.findConfigFileForServer;
+exports.formatToolName = mcpManager.formatToolName;
+exports.loadMcpConfig = mcpManager.loadMcpConfig;
+exports.mcpServerSources = mcpManager.mcpServerSources;
+exports.resetApprovedEnvVars = mcpManager.resetApprovedEnvVars;
+exports.setMCPServerDisabled = mcpManager.setMCPServerDisabled;

@@ -6,15 +6,6 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-image_exists() {
-    local image_name=$1
-    if docker image inspect "$image_name" >/dev/null 2>&1; then
-        return 0
-    else
-        return 1
-    fi
-}
-
 get_compose_cmd() {
     if command_exists "docker" && docker compose version >/dev/null 2>&1; then
         echo "docker compose"
@@ -33,5 +24,5 @@ if [ "$compose_cmd" = "none" ]; then
     exit 1
 fi
 
-$compose_cmd pull kiro2api
+$compose_cmd pull codefreemax
 $compose_cmd up -d --remove-orphans

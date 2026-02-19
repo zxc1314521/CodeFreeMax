@@ -1,0 +1,2 @@
+import{C as n}from"./debounce-BNOmQ76Y.js";try{e=typeof window<"u"?window:typeof global<"u"?global:typeof globalThis<"u"?globalThis:typeof self<"u"?self:{},(d=new e.Error().stack)&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[d]="016c39f2-47b4-47e5-aadf-ebc376dec083",e._sentryDebugIdIdentifier="sentry-dbid-016c39f2-47b4-47e5-aadf-ebc376dec083")}catch{}var e,d;n();
+//# sourceMappingURL=legacy-2-VBD5Kq.js.map

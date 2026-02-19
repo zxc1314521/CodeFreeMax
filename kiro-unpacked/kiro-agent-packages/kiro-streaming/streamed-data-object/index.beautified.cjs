@@ -1,0 +1,341 @@
+"use strict";
+var g = Object.defineProperty;
+var m = (n, t, e) => t in n ? g(n, t, {
+  enumerable: !0,
+  configurable: !0,
+  writable: !0,
+  value: e
+}) : n[t] = e;
+var y = (n, t, e) => m(n, typeof t != "symbol" ? t + "" : t, e);
+Object.defineProperty(exports, Symbol.toStringTag, {
+  value: "Module"
+});
+const A = require("../async-stream/index.cjs"),
+  O = require("../powers-Bsu2Ho0l.cjs");
+class l extends O.KiroError {
+  constructor(t) {
+    super(t), this.name = "StreamedDataObjectError"
+  }
+}
+class f extends l {
+  constructor(t, e) {
+    super(`Invalid object type provided: expected ${t}, got ${e}`), this.name = "InvalidObjectType"
+  }
+  get userFacingSessionErrorMessage() {
+    return "Invalid data type"
+  }
+  get userFacingFixCallback() {}
+}
+class p extends l {
+  constructor(t, e, s) {
+    super(`Invalid type at keypath "${t}": expected ${e}, got ${s}`), this.name = "InvalidTypeAtKeypath"
+  }
+  get userFacingSessionErrorMessage() {
+    return "Invalid data structure"
+  }
+  get userFacingFixCallback() {}
+}
+class _ extends l {
+  constructor() {
+    super("Invalid root object: must be an array or object"), this.name = "InvalidRootObject"
+  }
+  get userFacingSessionErrorMessage() {
+    return "Invalid data format"
+  }
+  get userFacingFixCallback() {}
+}
+class K extends l {
+  constructor(t) {
+    super(`Expected data at keypath "${t}" but none was found`), this.name = "ExpectedDataAtKeypath"
+  }
+  get userFacingSessionErrorMessage() {
+    return "Missing required data"
+  }
+  get userFacingFixCallback() {}
+}
+const o = class o {
+  constructor(t) {
+    y(this, "data");
+    y(this, "closed", !1);
+    y(this, "streamPosition", 0);
+    y(this, "dataByKeypath", new Map);
+    y(this, "incompleteDataByKeypath", new Set);
+    y(this, "completedDataByKeypath", new Set);
+    y(this, "subscribersByKeypath", new Map);
+    this.data = t, this.dataByKeypath.set(o.ROOT, this.data), this._refreshDataReferencesAtKeypath(o.ROOT, this
+      .data), this._updateOpenKeys(o.ROOT, t)
+  }
+  static ofArray() {
+    return new o([])
+  }
+  static ofObject() {
+    return new o({})
+  }
+  static ofData(t) {
+    if (typeof t != "object" && !Array.isArray(t)) throw new _;
+    return new o(t)
+  }
+  getRootValue() {
+    return this.getValueAtKeypath(o.ROOT)
+  }
+  getValueAtKeypath(t) {
+    return this.dataByKeypath.get(t)
+  }
+  extendRootArray(t) {
+    this.extendArrayAtKeypath(o.ROOT, t)
+  }
+  extendArrayAtKeypath(t, e) {
+    const s = this.dataByKeypath.get(t);
+    if (!s) {
+      this._setDataAtKeypath(t, e), this._updateOpenKeys(t, e);
+      return
+    }
+    if (Array.isArray(s) && Array.isArray(e)) {
+      for (const r of e) this._appendArrayAtKeypath(t, r);
+      this._updateOpenKeys(t, e);
+      return
+    }
+    if (!Array.isArray(s)) throw new p(t, "array-like", typeof s);
+    if (!Array.isArray(e)) throw new f("array-like", typeof e)
+  }
+  appendArrayAtKeypath(t, e) {
+    this._appendArrayAtKeypath(t, e), this._updateOpenKeys(t, e)
+  }
+  _appendArrayAtKeypath(t, e) {
+    const s = this.dataByKeypath.get(t);
+    if (!s) throw new K(t);
+    if (!Array.isArray(s)) throw new p(t, "array-like", typeof s);
+    const r = s.length,
+      i = `${t}.${r}`;
+    s.push(e), this.dataByKeypath.set(i, e), this._refreshDataReferencesAtKeypath(i, e), this._emitArrayExtended(t,
+      r, e)
+  }
+  mergeRootObject(t) {
+    this.mergeObjectAtKeypath(o.ROOT, t)
+  }
+  mergeObjectAtKeypath(t, e) {
+    this._mergeObjectAtKeypath(t, e), this._updateOpenKeys(t, e)
+  }
+  _mergeObjectAtKeypath(t, e) {
+    const s = this.dataByKeypath.get(t),
+      r = typeof s,
+      i = typeof e;
+    if (!s) {
+      this._setDataAtKeypath(t, e);
+      return
+    }
+    if (r === "object" && i === "object") {
+      for (const [a, h] of Object.entries(e)) {
+        const c = `${t}.${a}`;
+        s[a] ? this._mergeObjectAtKeypath(c, h) : this._setDataAtKeypath(c, h)
+      }
+      this._emitValueWritten(t, this.dataByKeypath.get(t));
+      return
+    }
+    if (r !== "object") throw new p(t, "object", r);
+    if (i !== "object") throw new f("object", i)
+  }
+  _setDataAtKeypath(t, e, s) {
+    const r = t.lastIndexOf("."),
+      i = t.slice(0, Math.max(0, r)),
+      a = t.slice(Math.max(0, r + 1)),
+      h = this.dataByKeypath.get(i);
+    if (!h) throw new K(i);
+    if (Array.isArray(e)) {
+      const c = [];
+      this.dataByKeypath.set(t, c), Object.assign(h, {
+        [a]: c
+      }), this._refreshDataReferencesAtKeypath(t, c);
+      for (const [u, d] of e.entries()) this._setDataAtKeypath(`${t}.${u}`, d);
+      this._emitValueWritten(t, this.dataByKeypath.get(t));
+      return
+    }
+    if (typeof e == "object" && e !== null) {
+      const c = {};
+      this.dataByKeypath.set(t, c), Object.assign(h, {
+        [a]: c
+      }), this._refreshDataReferencesAtKeypath(t, c);
+      for (const [u, d] of Object.entries(e)) this._setDataAtKeypath(`${t}.${u}`, d);
+      this._emitValueWritten(t, this.dataByKeypath.get(t)), this._emitValueWritten(i, this.dataByKeypath.get(i));
+      return
+    }
+    h[a] && h[a] === e || (this.dataByKeypath.set(t, e), Object.assign(h, {
+      [a]: e
+    }), this._refreshDataReferencesAtKeypath(t, e), typeof e == "string" ? this._emitStringExtended(t, e, s ||
+      e) : this._emitValueWritten(t, e))
+  }
+  extendStringAtKeypath(t, e) {
+    const s = this.dataByKeypath.get(t),
+      r = typeof s;
+    if (!s) {
+      this._setDataAtKeypath(t, e), this._updateOpenKeys(t, e);
+      return
+    }
+    if (r === "string" && typeof e == "string") {
+      const i = s + e;
+      this._setDataAtKeypath(t, i, e), this._updateOpenKeys(t, i);
+      return
+    }
+    if (r !== "string") throw new p(t, "string", r);
+    if (typeof e != "string") throw new f("string", typeof e)
+  }
+  _refreshDataReferencesAtKeypath(t, e) {
+    if (Array.isArray(e))
+      for (const [s, r] of e.entries()) {
+        const i = `${t}.${s}`;
+        this.dataByKeypath.set(i, r), this._refreshDataReferencesAtKeypath(i, r)
+      }
+    if (typeof e == "object" && e !== null)
+      for (const [s, r] of Object.entries(e)) {
+        const i = `${t}.${s}`;
+        this.dataByKeypath.set(i, r), this._refreshDataReferencesAtKeypath(i, r)
+      }
+  }
+  _updateOpenKeys(t, e) {
+    const s = new Set([...this._computeParentKeypaths(t), ...this._computeAllObjectKeypaths(t, e)]),
+      r = [];
+    for (const i of this.incompleteDataByKeypath) s.has(i) || r.push(i);
+    r.sort((i, a) => a.localeCompare(i));
+    for (const i of r) this._emitObjectCompleted(i), this.completedDataByKeypath.add(i);
+    this.incompleteDataByKeypath = s
+  }
+  _computeParentKeypaths(t) {
+    const e = [],
+      s = t.split(".");
+    for (let r = 0; r < s.length; r++) e.push(s.slice(0, r).join("."));
+    return e
+  }
+  _computeAllObjectKeypaths(t, e) {
+    const s = [t];
+    if (Array.isArray(e))
+      for (const [r, i] of e.entries()) {
+        const a = `${t}.${r}`;
+        s.push(...this._computeAllObjectKeypaths(a, i))
+      }
+    if (typeof e == "object" && e !== null)
+      for (const [r, i] of Object.entries(e)) {
+        const a = `${t}.${r}`;
+        s.push(...this._computeAllObjectKeypaths(a, i))
+      }
+    return s
+  }
+  close() {
+    const t = new Set;
+    for (const s of this.subscribersByKeypath.keys()) t.add(s);
+    for (const s of this.incompleteDataByKeypath.keys()) t.add(s);
+    const e = [...t].sort((s, r) => r.length - s.length);
+    for (const s of e) s !== "*" && this._emitObjectCompleted(s);
+    for (const s of this.subscribersByKeypath.keys())
+      for (const r of this._getSubscribers(s)) r.close();
+    this.subscribersByKeypath.clear(), this.closed = !0
+  }
+  subscribe(t) {
+    const e = {
+        ctx: this,
+        type: "ObjectSubscribed",
+        streamPosition: this.streamPosition,
+        keyPath: t,
+        value: this._copy(this.getValueAtKeypath(t))
+      },
+      s = new A.AsyncStream({
+        messages: [e]
+      });
+    if (this.completedDataByKeypath.has(t) || this.closed) {
+      const i = this.getValueAtKeypath(t) ? {
+        ctx: this,
+        type: "ObjectCompleted",
+        streamPosition: this.streamPosition,
+        keyPath: t,
+        value: this._copy(this.getValueAtKeypath(t))
+      } : {
+        ctx: this,
+        type: "ObjectCompletedWithoutData",
+        streamPosition: this.streamPosition,
+        keyPath: t
+      };
+      return s.send(i), s.close(), s
+    }
+    const r = this.subscribersByKeypath.get(t) || [];
+    return r.push(s), this.subscribersByKeypath.set(t, r), s
+  }
+  isKeypathCompleted(t) {
+    return this.completedDataByKeypath.has(t)
+  }
+  subscribeAll() {
+    return this.subscribe("*")
+  }
+  _getSubscribers(t) {
+    const e = [...this.subscribersByKeypath.keys()],
+      s = ["*"];
+    for (const i of e)(t === i || t.startsWith(`${i}.`)) && s.push(i);
+    return s.map(i => this.subscribersByKeypath.get(i) || []).flatMap(i => i)
+  }
+  _emitArrayExtended(t, e, s) {
+    const r = this._getSubscribers(t);
+    if (r.length === 0) return;
+    const i = {
+      ctx: this,
+      type: "ArrayExtended",
+      streamPosition: this.streamPosition,
+      keyPath: t,
+      index: e,
+      value: this._copy(s)
+    };
+    for (const a of r) a.send(i)
+  }
+  _emitObjectCompleted(t) {
+    const e = this._getSubscribers(t);
+    if (e.length === 0) return;
+    const s = this.getValueAtKeypath(t) ? {
+      ctx: this,
+      type: "ObjectCompleted",
+      streamPosition: this.streamPosition,
+      keyPath: t,
+      value: this._copy(this.getValueAtKeypath(t))
+    } : {
+      ctx: this,
+      type: "ObjectCompletedWithoutData",
+      streamPosition: this.streamPosition,
+      keyPath: t
+    };
+    for (const r of e) r.send(s);
+    for (const r of this.subscribersByKeypath.get(t) || []) r.close()
+  }
+  _emitValueWritten(t, e) {
+    const s = this._getSubscribers(t);
+    if (s.length === 0) return;
+    const r = {
+      ctx: this,
+      type: "ObjectUpdated",
+      streamPosition: this.streamPosition,
+      keyPath: t,
+      value: this._copy(e)
+    };
+    for (const i of s) i.send(r)
+  }
+  _emitStringExtended(t, e, s) {
+    const r = this._getSubscribers(t);
+    if (r.length === 0 || !s) return;
+    const i = {
+      ctx: this,
+      type: "StringExtended",
+      streamPosition: this.streamPosition,
+      keyPath: t,
+      value: e,
+      extension: s
+    };
+    for (const a of r) a.send(i)
+  }
+  _copy(t) {
+    if (Array.isArray(t)) return t.map(e => this._copy(e));
+    if (typeof t == "object" && t !== null) {
+      const e = {};
+      for (const [s, r] of Object.entries(t)) e[s] = this._copy(r);
+      return e
+    }
+    return t
+  }
+};
+y(o, "ROOT", "root");
+let b = o;
+exports.StreamedDataObject = b;

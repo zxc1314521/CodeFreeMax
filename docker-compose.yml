@@ -1,21 +1,21 @@
 version: '3.8'
 
 services:
-  kiro2api:
-    image: ${DOCKER_IMAGE:-ssmdo/kiro2api:latest}
-    container_name: kiro2api
+  codefreemax:
+    image: ${DOCKER_IMAGE:-ssmdo/codefreemax:latest}
+    container_name: codefreemax
     restart: unless-stopped
     ports:
-      - "${PORT:-8000}:8000"
+      - "${PORT:-8877}:8000"
     volumes:
-      - ./config.yaml:/app/manifest/config/config.yaml:ro
+      - ./config.yaml:/app/config.yaml:ro
       - ./data:/app/data
     environment:
       - TZ=Asia/Shanghai
     depends_on:
       - redis
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8000/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8000/api/version"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -23,7 +23,7 @@ services:
 
   redis:
     image: redis:alpine
-    container_name: kiro2api-redis
+    container_name: cfm-client-redis
     restart: unless-stopped
     volumes:
       - redis-data:/data
@@ -36,4 +36,3 @@ services:
 
 volumes:
   redis-data:
-
