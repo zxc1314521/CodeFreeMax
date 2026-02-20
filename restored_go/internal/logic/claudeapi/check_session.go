@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -78,7 +77,7 @@ func (s *sClaudeApi) checkSessionKey(account *model.ClaudeApiAccount) error {
 	var accountType string
 
 	for _, membership := range memberships {
-		memberJson, _ := gjson.NewWithTag(membership, "json")
+		memberJson := gjson.NewWithTag(membership, "json")
 
 		// Get "allowed_capabilities" (len 0x19 = 25 → "allowed_capabilities")
 		capabilities := memberJson.Get("allowed_capabilities").Strings()
@@ -272,17 +271,7 @@ func (s *sClaudeApi) checkSessionKey(account *model.ClaudeApiAccount) error {
 
 // cloneTransport clones the HTTP transport from a req client,
 // copying TLS settings, proxy config, etc.
-// This corresponds to the repeated transport-clone pattern in the decompiled code
-// (copying fields at offsets 0x10-0x48 of the transport struct).
-func cloneTransport(client *req.Client) *http.Transport {
-	// The binary clones transport by:
-	// 1. runtime_newobject for new transport
-	// 2. Copy TLSClientConfig (offset 0x10, 0x18)
-	// 3. Copy Certificates slice (offset 0x18-0x20, grow + typedslicecopy)
-	// 4. Copy CipherSuites slice (offset 0x28-0x38, grow + typedslicecopy)
-	// In Go source this is simply transport.Clone()
-	if t, ok := client.Transport.(*http.Transport); ok {
-		return t.Clone()
-	}
-	return nil
+// This corresponds to the repeated transport-clone pattern in the decompiled code.
+func cloneTransport(client *req.Client) http.RoundTripper {
+	return client.GetTransport()
 }

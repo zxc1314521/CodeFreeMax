@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/http"
+	"strconv"
 	"time"
 
 	"kiro2api/internal/model"
@@ -149,7 +149,7 @@ func (s *sClaudeApi) SendChatRequest(
 	logger := gins.Log()
 
 	// Inject Claude Code thinking context into the request body
-	modifiedBody := injectClaudeCodeContext(body, account.ThinkingBudget, account.Context)
+	modifiedBody := injectClaudeCodeContext(body, strconv.Itoa(account.ThinkingBudget), account.Context)
 
 	// Create API client for this account
 	client := s.newClaudeApiClient(account)
@@ -164,7 +164,7 @@ func (s *sClaudeApi) SendChatRequest(
 	logger.Infof(ctx, "[ClaudeApi] SendChatRequest account=%d, org=%s",
 		account.ID, account.OrganizationID)
 
-	resp := request.Fetch(fmt.Sprintf("%s/v1/messages", anthropicAPIBase), "POST")
+	resp := request.FetchStream(fmt.Sprintf("%s/v1/messages", anthropicAPIBase), "POST")
 	return resp
 }
 

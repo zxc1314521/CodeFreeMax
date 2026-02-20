@@ -1,10 +1,11 @@
 package claudeapi
 
 import (
+	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/textproto"
+	"strings"
 	"time"
 
 	"kiro2api/internal/common"
@@ -24,28 +25,28 @@ import (
 //
 // Flow:
 //  1. Read request body via io.ReadAll
-//  2. On read error → return JSON error {code: "error", message: ..., data: ...}
+//  2. On read error -> return JSON error {code: "error", message: ..., data: ...}
 //  3. Log auth header and body length/model info
 //  4. Extract session ID from session key
 //  5. Create retry config, get concurrency manager
 //  6. Retry loop:
 //     a. Check concurrentSessionMap for existing in-flight request
 //     b. Get account with slot from concurrency manager
-//     c. On slot error → log and retry with sleep
+//     c. On slot error -> log and retry with sleep
 //     d. Load Gate credentials for the account
 //     e. Call response handler to proxy the request
 //     f. Inner retry loop over response handler attempts:
-//        - 2xx → success, stream response back
-//        - 401/403/429 → retryable, call HandleErrorResponse, clear session map
-//        - 5xx → retryable with sleep
-//        - other 4xx → non-retryable, break
+//        - 2xx -> success, stream response back
+//        - 401/403/429 -> retryable, call HandleErrorResponse, clear session map
+//        - 5xx -> retryable with sleep
+//        - other 4xx -> non-retryable, break
 //     g. On retryable error with account marked bad:
 //        - Log warning, delete from session map
 //        - Launch goroutine to handle error response asynchronously
 //        - Release concurrency slot
 //     h. On success (response available):
 //        - Defer body close
-//        - If 2xx and session key present → store usage in session map
+//        - If 2xx and session key present -> store usage in session map
 //        - Release concurrency slot, release account
 //        - Copy upstream response headers
 //        - Write status code
@@ -54,7 +55,7 @@ import (
 func (ctrl *ChatController) Messages(r *ghttp.Request) {
 	ctx := r.Context()
 
-	// xdZLD7_Ho6qQX — likely an auth/rate-limit middleware check
+	// xdZLD7_Ho6qQX -- likely an auth/rate-limit middleware check
 	// Extracted from the first call after getting context
 	authHeader := r.GetHeader("Authorization")
 
@@ -109,14 +110,14 @@ func (ctrl *ChatController) Messages(r *ghttp.Request) {
 		}
 
 		// Get an account with a concurrency slot
-		account, releaseSlot, releaseAccount, slotErr := concurrencyMgr.GetClaudeApiAccountWithSlot(
+		acctIface, releaseSlot, releaseAccount, slotErr := concurrencyMgr.GetAccountWithSlot(
 			ctx,
 			retryConfig.TimeoutDuration,
 			existingAccount,
 		)
 
 		if slotErr != nil {
-			// Failed to get account slot — log and retry
+			// Failed to get account slot -- log and retry
 			logger.Errorf(ctx, "[ClaudeApi] Messages get account slot error: %v, attempt=%d", slotErr, attempt)
 			releaseSlot()
 			releaseAccount()
@@ -125,8 +126,10 @@ func (ctrl *ChatController) Messages(r *ghttp.Request) {
 			continue
 		}
 
+		account, _ := acctIface.(*model.ClaudeApiAccount)
+
 		if existingAccount != nil && slotErr != nil {
-			// Had an existing session but couldn't get slot — clean up session map
+			// Had an existing session but couldn't get slot -- clean up session map
 			concurrentSessionMap.Delete(sessionID)
 			lastErr = slotErr
 			lastErrAccount = nil
@@ -149,18 +152,18 @@ func (ctrl *ChatController) Messages(r *ghttp.Request) {
 			panic("sClaudeApi service is nil")
 		}
 
-		// Call the upstream proxy — inner retry loop
+		// Call the upstream proxy -- inner retry loop
 		var resp *proxy.Response
 		retryable := false
 		var innerErr error
 		var innerErrAccount interface{}
 
-		for innerAttempt := int64(0); innerAttempt < retryConfig.MaxAttempts; innerAttempt++ {
+		for innerAttempt := int64(0); innerAttempt < retryConfig.MaxRetries; innerAttempt++ {
 			resp = svc.SendChatRequest(ctx, account, bodyBytes)
 
 			if resp == nil {
-				// No response — error case
-				if innerAttempt < retryConfig.MaxAttempts-1 {
+				// No response -- error case
+				if innerAttempt < retryConfig.MaxRetries-1 {
 					time.Sleep(retryConfig.RetrySleep)
 				}
 				innerErr = nil
@@ -170,17 +173,17 @@ func (ctrl *ChatController) Messages(r *ghttp.Request) {
 
 			statusCode := resp.StatusCode
 
-			// 2xx success — break out
+			// 2xx success -- break out
 			if statusCode >= 200 && statusCode < 300 {
 				break
 			}
 
-			// 401 (0x191) — Unauthorized, retryable
+			// 401 (0x191) -- Unauthorized, retryable
 			if statusCode == 401 {
 				retryable = true
-			} else if statusCode == 403 { // 0x193 — Forbidden, retryable
+			} else if statusCode == 403 { // 0x193 -- Forbidden, retryable
 				retryable = true
-			} else if statusCode == 429 { // 0x1AD — Rate Limited, retryable
+			} else if statusCode == 429 { // 0x1AD -- Rate Limited, retryable
 				retryable = true
 			} else {
 				retryable = false
@@ -195,8 +198,8 @@ func (ctrl *ChatController) Messages(r *ghttp.Request) {
 				break
 			}
 
-			// 5xx — retryable with sleep
-			if statusCode >= 500 && innerAttempt < retryConfig.MaxAttempts-1 {
+			// 5xx -- retryable with sleep
+			if statusCode >= 500 && innerAttempt < retryConfig.MaxRetries-1 {
 				svc.HandleErrorResponse(resp)
 				time.Sleep(retryConfig.RetrySleep)
 				innerErrAccount = nil
@@ -204,7 +207,7 @@ func (ctrl *ChatController) Messages(r *ghttp.Request) {
 				continue
 			}
 
-			// Other 4xx or last attempt — non-retryable
+			// Other 4xx or last attempt -- non-retryable
 			innerErr = nil
 			innerErrAccount = nil
 			break
@@ -240,9 +243,9 @@ func (ctrl *ChatController) Messages(r *ghttp.Request) {
 		// We have a response (success or non-retryable error)
 		if resp != nil {
 			// Defer close of upstream response body
-			defer resp.Body.Close()
+			defer resp.Close()
 
-			// On 2xx success with session key — store in concurrent session map
+			// On 2xx success with session key -- store in concurrent session map
 			if resp.StatusCode < 300 && sessionID != "" {
 				concurrentSessionMap.Store(sessionID, account)
 			}
@@ -252,54 +255,57 @@ func (ctrl *ChatController) Messages(r *ghttp.Request) {
 			releaseAccount()
 
 			// Copy upstream response headers to downstream
-			upstreamHeaders := resp.Header
-			downstreamHeader := r.Response.Writer.Header()
-			for key, values := range upstreamHeaders {
-				canonicalKey := textproto.CanonicalMIMEHeaderKey(key)
-				for _, v := range values {
-					downstreamHeader.Add(canonicalKey, v)
+			if resp.Header != nil {
+				downstreamHeader := r.Response.RawWriter().Header()
+				for key, values := range resp.Header {
+					canonicalKey := textproto.CanonicalMIMEHeaderKey(key)
+					for _, v := range values {
+						downstreamHeader.Add(canonicalKey, v)
+					}
 				}
 			}
 
 			// Write status code
-			r.Response.Writer.WriteHeader(resp.StatusCode)
+			r.Response.RawWriter().WriteHeader(resp.StatusCode)
 
 			// Stream body in 128KB (0x20000) chunks
-			var errorBodyBuf []byte
-			buf := make([]byte, 0x20000) // 128KB buffer
-			for {
-				n, readErr := resp.Body.Read(buf)
-				if n > 0 {
-					r.Response.Writer.Write(buf[:n])
+			if resp.RawBody != nil {
+				var errorBodyBuf []byte
+				buf := make([]byte, 0x20000) // 128KB buffer
+				for {
+					n, readErr := resp.RawBody.Read(buf)
+					if n > 0 {
+						r.Response.RawWriter().Write(buf[:n])
 
-					// Flush if the response supports it
-					if flusher, ok := r.Response.Writer.(http.Flusher); ok {
-						flusher.Flush()
+						// Flush if the response supports it
+						if flusher, ok := r.Response.RawWriter().(http.Flusher); ok {
+							flusher.Flush()
+						}
+
+						// If status >= 400, also buffer the error body
+						if resp.StatusCode >= 400 {
+							errorBodyBuf = append(errorBodyBuf, buf[:n]...)
+						}
 					}
 
-					// If status >= 400, also buffer the error body
-					if resp.StatusCode >= 400 {
-						errorBodyBuf = append(errorBodyBuf, buf[:n]...)
+					if readErr != nil {
+						break
 					}
 				}
 
-				if readErr != nil {
-					break
+				// Post-response processing goroutine
+				// If status >= 400, launch async error handler with buffered body
+				if resp.StatusCode >= 400 {
+					go func(acct *model.ClaudeApiAccount, respObj *proxy.Response, errBody []byte) {
+						svc.handleApiErrorResponse(acct, respObj.StatusCode)
+					}(account, resp, errorBodyBuf)
 				}
-			}
-
-			// Post-response processing goroutine
-			// If status >= 400, launch async error handler with buffered body
-			if resp.StatusCode >= 400 {
-				go func(acct *model.ClaudeApiAccount, respObj *proxy.Response, errBody []byte) {
-					svc.handleApiErrorResponse(acct, respObj.StatusCode)
-				}(account, resp, errorBodyBuf)
 			}
 
 			return
 		}
 
-		// No response at all — release and continue retry
+		// No response at all -- release and continue retry
 		releaseSlot()
 		releaseAccount()
 	}
@@ -317,7 +323,7 @@ func (ctrl *ChatController) Messages(r *ghttp.Request) {
 
 	logger.Warningf(ctx, "[ClaudeApi] Messages all retries exhausted: %s, body=%s", errMsg, string(bodyBytes))
 
-	// FtTgl3_ZQHMyB7 — likely a metrics/telemetry call
+	// FtTgl3_ZQHMyB7 -- likely a metrics/telemetry call
 	r.Response.WriteJson(common.ErrorResponse{
 		Code:    "error",
 		Message: "upstream error",

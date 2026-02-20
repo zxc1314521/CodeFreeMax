@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -32,11 +33,17 @@ import (
 // ============================================================================
 
 const (
-	// Kiro token refresh endpoint path
+	// Kiro token refresh endpoint path (Social auth)
 	kiroRefreshTokenPath = "/refreshToken"
+
+	// AWS SSO OIDC token endpoint path (IDC auth)
+	awsSSOOIDCTokenPath = "/token"
 
 	// Content-Type for token requests (JSON for Kiro auth)
 	authContentType = "application/json"
+
+	// Content-Type for AWS SSO OIDC requests
+	awsSSOOIDCContentType = "application/x-amz-json-1.1"
 
 	// Auth client timeout (30 seconds)
 	authClientTimeout = 30 * time.Second
@@ -118,11 +125,13 @@ func (s *sKiro) RefreshToken(
 // ============================================================================
 
 // authRefresh performs the core authentication refresh logic.
-// Updated: Uses Kiro's custom /refreshToken endpoint with JSON body and Bearer auth.
+// Routes to Social or IDC refresh based on auth_method field.
 func (s *sKiro) authRefresh(
 	client *req.Client,
 	account map[string]interface{},
 ) error {
+	logger := gins.Log()
+
 	// Extract refresh token
 	refreshToken, _ := account["refresh_token"].(string)
 	if refreshToken == "" {
@@ -130,17 +139,35 @@ func (s *sKiro) authRefresh(
 		return fmt.Errorf("kiro account %d has no refresh token", accountID)
 	}
 
-	// Get Kiro auth base URL
-	authBase := getKiroAuthBaseURL(account)
-
-	// Get current access token for Bearer auth
-	accessToken, _ := account["access_token"].(string)
-
 	// Get proxy URL
 	proxyURL := getProxyURL(account)
 
-	// Perform the token refresh
-	tokenResp, err := s.refreshToken(client, authBase, accessToken, refreshToken, proxyURL)
+	// Branch based on auth method
+	authMethod, _ := account["auth_method"].(string)
+
+	var tokenResp *KiroTokenResponse
+	var err error
+
+	if authMethod == "IdC" {
+		// IDC auth: use AWS SSO OIDC createToken endpoint
+		clientId, _ := account["client_id"].(string)
+		clientSecret, _ := account["client_secret"].(string)
+		region, _ := account["region"].(string)
+		if region == "" {
+			region = "us-east-1"
+		}
+		if clientId == "" || clientSecret == "" {
+			accountID, _ := account["id"].(int64)
+			return fmt.Errorf("kiro IDC account %d missing client_id or client_secret", accountID)
+		}
+		tokenResp, err = s.refreshTokenIDC(client, clientId, clientSecret, refreshToken, region, proxyURL)
+	} else {
+		// Social auth: use Kiro auth service /refreshToken
+		authBase := getKiroAuthBaseURL(account)
+		accessToken, _ := account["access_token"].(string)
+		tokenResp, err = s.refreshTokenSocial(client, authBase, accessToken, refreshToken, proxyURL)
+	}
+
 	if err != nil {
 		return err
 	}
@@ -148,12 +175,19 @@ func (s *sKiro) authRefresh(
 	// Update account with new tokens
 	if tokenResp.AccessToken != "" {
 		account["access_token"] = tokenResp.AccessToken
+		logger.Infof(nil, "[Kiro] Got new access_token (len=%d, prefix=%s...)",
+			len(tokenResp.AccessToken), truncateStr(tokenResp.AccessToken, 20))
 	}
 	if tokenResp.RefreshToken != "" {
 		account["refresh_token"] = tokenResp.RefreshToken
 	}
 	if tokenResp.ExpiresIn > 0 {
 		account["token_expiry"] = time.Now().Unix() + tokenResp.ExpiresIn
+		logger.Infof(nil, "[Kiro] Token expires in %d seconds", tokenResp.ExpiresIn)
+	} else {
+		// Some responses don't include expiresIn — default to 1 hour
+		account["token_expiry"] = time.Now().Unix() + 3600
+		logger.Warning(nil, "[Kiro] No expiresIn in response, defaulting to 1 hour")
 	}
 	if tokenResp.IDToken != "" {
 		account["id_token"] = tokenResp.IDToken
@@ -163,21 +197,14 @@ func (s *sKiro) authRefresh(
 }
 
 // ============================================================================
-// refreshToken
+// refreshTokenSocial (Social Auth)
 // ============================================================================
 
-// refreshToken performs the Kiro token refresh HTTP request.
-// Updated: Uses POST /refreshToken with JSON body and Bearer auth header.
-//
-// Request format:
+// refreshTokenSocial performs the Kiro social auth token refresh.
 //   POST {authBaseURL}/refreshToken
-//   Authorization: Bearer {accessToken}
 //   Content-Type: application/json
 //   Body: {"refreshToken": "{refreshToken}"}
-//
-// Response format:
-//   {"accessToken": "...", "refreshToken": "...", "expiresIn": 3600}
-func (s *sKiro) refreshToken(
+func (s *sKiro) refreshTokenSocial(
 	client *req.Client,
 	authBaseURL string,
 	accessToken string,
@@ -186,10 +213,8 @@ func (s *sKiro) refreshToken(
 ) (*KiroTokenResponse, error) {
 	logger := gins.Log()
 
-	// Step 1: Build token endpoint URL
 	tokenURL := authBaseURL + kiroRefreshTokenPath
 
-	// Step 2: Build JSON body
 	reqBody := map[string]string{
 		"refreshToken": refreshToken,
 	}
@@ -198,43 +223,104 @@ func (s *sKiro) refreshToken(
 		return nil, fmt.Errorf("marshal refresh request: %w", err)
 	}
 
-	// Step 3: Create auth HTTP client
 	authClient := newKiroAuthClient(client, proxyURL)
 
-	// Step 4: Build and send request
 	reqObj := authClient.R()
 	reqObj.SetHeader("Content-Type", authContentType)
+	reqObj.SetHeader("User-Agent", kiroUserAgent)
 	if accessToken != "" {
 		reqObj.SetHeader("Authorization", "Bearer "+accessToken)
 	}
 	reqObj.SetBodyBytes(bodyBytes)
 
-	logger.Debugf(nil, "[Kiro] POST %s", tokenURL)
+	logger.Debugf(nil, "[Kiro] Social refresh POST %s", tokenURL)
 
 	resp, err := reqObj.Post(tokenURL)
 	if err != nil {
 		return nil, fmt.Errorf("POST %s: %w", tokenURL, err)
 	}
 
-	// Step 5: Read response body
 	respBytes := resp.Bytes()
 
-	// Step 6: Check HTTP status
 	if resp.StatusCode != http.StatusOK {
-		logger.Warningf(nil, "[Kiro] Token refresh returned HTTP %d: %s",
+		logger.Warningf(nil, "[Kiro] Social token refresh returned HTTP %d: %s",
 			resp.StatusCode, truncateStr(string(respBytes), 200))
-		return nil, fmt.Errorf("token refresh HTTP %d: %s", resp.StatusCode, string(respBytes))
+		return nil, fmt.Errorf("social token refresh HTTP %d: %s", resp.StatusCode, string(respBytes))
 	}
 
-	// Step 7: Parse JSON response
 	var tokenResp KiroTokenResponse
 	if err := json.Unmarshal(respBytes, &tokenResp); err != nil {
 		return nil, fmt.Errorf("parse token response: %w", err)
 	}
 
-	// Step 8: Validate response
 	if tokenResp.AccessToken == "" {
-		return nil, fmt.Errorf("token refresh returned empty access_token")
+		return nil, fmt.Errorf("social token refresh returned empty access_token")
+	}
+
+	return &tokenResp, nil
+}
+
+// ============================================================================
+// refreshTokenIDC (AWS SSO OIDC)
+// ============================================================================
+
+// refreshTokenIDC performs the AWS SSO OIDC token refresh for IDC accounts.
+//   POST https://oidc.{region}.amazonaws.com/token
+//   Content-Type: application/json
+//   Body: {"clientId":"...","clientSecret":"...","refreshToken":"...","grantType":"refresh_token"}
+func (s *sKiro) refreshTokenIDC(
+	client *req.Client,
+	clientId string,
+	clientSecret string,
+	refreshToken string,
+	region string,
+	proxyURL string,
+) (*KiroTokenResponse, error) {
+	logger := gins.Log()
+
+	// Build AWS SSO OIDC endpoint
+	tokenURL := fmt.Sprintf("https://oidc.%s.amazonaws.com%s", region, awsSSOOIDCTokenPath)
+
+	reqBody := map[string]string{
+		"clientId":     clientId,
+		"clientSecret": clientSecret,
+		"refreshToken": refreshToken,
+		"grantType":    "refresh_token",
+	}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal IDC refresh request: %w", err)
+	}
+
+	authClient := newKiroAuthClient(client, proxyURL)
+
+	reqObj := authClient.R()
+	reqObj.SetHeader("Content-Type", authContentType)
+	reqObj.SetBodyBytes(bodyBytes)
+
+	logger.Infof(nil, "[Kiro] IDC refresh POST %s (clientId=%s, region=%s)", tokenURL, clientId, region)
+
+	resp, err := reqObj.Post(tokenURL)
+	if err != nil {
+		return nil, fmt.Errorf("POST %s: %w", tokenURL, err)
+	}
+
+	respBytes := resp.Bytes()
+
+	if resp.StatusCode != http.StatusOK {
+		logger.Warningf(nil, "[Kiro] IDC token refresh returned HTTP %d: %s",
+			resp.StatusCode, truncateStr(string(respBytes), 200))
+		return nil, fmt.Errorf("IDC token refresh HTTP %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	// AWS SSO OIDC response uses camelCase fields matching KiroTokenResponse
+	var tokenResp KiroTokenResponse
+	if err := json.Unmarshal(respBytes, &tokenResp); err != nil {
+		return nil, fmt.Errorf("parse IDC token response: %w", err)
+	}
+
+	if tokenResp.AccessToken == "" {
+		return nil, fmt.Errorf("IDC token refresh returned empty access_token")
 	}
 
 	return &tokenResp, nil
@@ -293,10 +379,13 @@ func (s *sKiro) isTokenExpiringSoon(account map[string]interface{}) bool {
 //   3. GET request to {endpoint}/usageLimits or similar
 //   4. Parse JSON response into UsageLimits struct
 //   5. Return limits or error
-func (s *sKiro) getUsageLimits(
+// getCodeWhispererUsage fetches usage limits from the CodeWhisperer API.
+// IDC accounts: /getUsageLimits?isEmailRequired=true&origin=AI_EDITOR&resourceType=AGENTIC_REQUEST
+// Social accounts: /getUsageLimits?isEmailRequired=true&origin=AI_EDITOR&profileArn={encoded_arn}
+func (s *sKiro) getCodeWhispererUsage(
 	client *req.Client,
 	account map[string]interface{},
-) (*UsageLimits, error) {
+) (*CodeWhispererUsageResponse, error) {
 	logger := gins.Log()
 
 	accessToken, _ := account["access_token"].(string)
@@ -304,12 +393,19 @@ func (s *sKiro) getUsageLimits(
 		return nil, fmt.Errorf("no access token for usage limits request")
 	}
 
-	// Build endpoint URL
-	endpoint, _ := account["endpoint"].(string)
-	if endpoint == "" {
-		endpoint = awsQAPIBase
+	// Determine auth method and build query params
+	authMethod, _ := account["auth_method"].(string)
+	usageURL := codeWhispererAPIBase + "/getUsageLimits?isEmailRequired=true&origin=AI_EDITOR"
+	if strings.EqualFold(authMethod, "idc") {
+		usageURL += "&resourceType=AGENTIC_REQUEST"
+	} else {
+		// Social account — use profileArn
+		profileArn, _ := account["profile_arn"].(string)
+		if profileArn == "" {
+			profileArn = defaultProfileArn
+		}
+		usageURL += "&profileArn=" + url.QueryEscape(profileArn)
 	}
-	usageURL := endpoint + "/usageLimits"
 
 	// Get proxy
 	proxyURL := getProxyURL(account)
@@ -321,7 +417,64 @@ func (s *sKiro) getUsageLimits(
 	}
 	clonedClient.SetTimeout(authClientTimeout)
 
-	// Build request
+	// Build request with Kiro-style headers
+	kiroVersion := "0.6.18"
+	machineID := s.machineID
+	if machineID == "" {
+		machineID = "unknown"
+	}
+	xAmzUserAgent := fmt.Sprintf("aws-sdk-js/1.0.0 KiroIDE-%s-%s", kiroVersion, machineID)
+
+	reqObj := clonedClient.R()
+	reqObj.SetHeader("Authorization", "Bearer "+accessToken)
+	reqObj.SetHeader("Content-Type", awsSSOOIDCContentType)
+	reqObj.SetHeader("x-amz-user-agent", xAmzUserAgent)
+
+	logger.Infof(nil, "[Kiro] GET usage limits: %s (auth_method=%s)", usageURL, authMethod)
+
+	resp, err := reqObj.Get(usageURL)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: %w", usageURL, err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		bodyStr := truncateStr(resp.String(), 200)
+		return nil, fmt.Errorf("usage limits HTTP %d: %s", resp.StatusCode, bodyStr)
+	}
+
+	var usageResp CodeWhispererUsageResponse
+	if err := resp.UnmarshalJson(&usageResp); err != nil {
+		return nil, fmt.Errorf("parse usage limits: %w", err)
+	}
+
+	return &usageResp, nil
+}
+
+// getUsageLimits fetches usage from Q API (kept for chat.go buildUsageLimitsHeaders compatibility).
+func (s *sKiro) getUsageLimits(
+	client *req.Client,
+	account map[string]interface{},
+) (*UsageLimits, error) {
+	logger := gins.Log()
+
+	accessToken, _ := account["access_token"].(string)
+	if accessToken == "" {
+		return nil, fmt.Errorf("no access token for usage limits request")
+	}
+
+	endpoint, _ := account["endpoint"].(string)
+	if endpoint == "" {
+		endpoint = awsQAPIBase
+	}
+	usageURL := endpoint + "/usageLimits"
+
+	proxyURL := getProxyURL(account)
+	clonedClient := client.Clone()
+	if proxyURL != "" {
+		clonedClient.SetProxyURL(proxyURL)
+	}
+	clonedClient.SetTimeout(authClientTimeout)
+
 	reqObj := clonedClient.R()
 	reqObj.SetHeader("Authorization", "Bearer "+accessToken)
 
@@ -349,27 +502,78 @@ func (s *sKiro) getUsageLimits(
 // GetUsageInfo
 // ============================================================================
 
-// GetUsageInfo retrieves usage information for a Kiro account.
-// Symbol: kiro2api/internal/logic/kiro.(*sKiro).GetUsageInfo (320B @ 0x17a2960)
-//
-// From decompiled (320 bytes):
-//   1. Call getUsageLimits to get current limits
-//   2. Format into a response map
-//   3. Return usage info
+// GetUsageInfo retrieves usage information for a Kiro account via CodeWhisperer API.
 func (s *sKiro) GetUsageInfo(
 	client *req.Client,
 	account map[string]interface{},
 ) (map[string]interface{}, error) {
-	limits, err := s.getUsageLimits(client, account)
+	usageResp, err := s.getCodeWhispererUsage(client, account)
 	if err != nil {
 		return nil, err
 	}
 
+	// Extract usage from first breakdown entry (same logic as KiroAccountManager)
+	usageUsed := 0
+	usageLimit := 0
+	subscriptionType := ""
+
+	if usageResp.SubscriptionInfo != nil {
+		subscriptionType = usageResp.SubscriptionInfo.Type
+	}
+
+	if len(usageResp.UsageBreakdownList) > 0 {
+		bd := usageResp.UsageBreakdownList[0]
+		// Main usage
+		if bd.UsageLimit != nil {
+			usageLimit += *bd.UsageLimit
+		}
+		if bd.CurrentUsage != nil {
+			usageUsed += *bd.CurrentUsage
+		}
+		// Free trial bonus
+		if bd.FreeTrialInfo != nil {
+			if bd.FreeTrialInfo.UsageLimit != nil {
+				usageLimit += *bd.FreeTrialInfo.UsageLimit
+			}
+			if bd.FreeTrialInfo.CurrentUsage != nil {
+				usageUsed += *bd.FreeTrialInfo.CurrentUsage
+			}
+		}
+		// Other bonuses
+		for _, b := range bd.Bonuses {
+			if b.UsageLimit != nil {
+				usageLimit += int(*b.UsageLimit)
+			}
+			if b.CurrentUsage != nil {
+				usageUsed += int(*b.CurrentUsage)
+			}
+		}
+	}
+
+	subscriptionTitle := ""
+	if usageResp.SubscriptionInfo != nil {
+		subscriptionTitle = usageResp.SubscriptionInfo.SubscriptionTitle
+	}
+
+	// Compute reset_date from first breakdown's NextDateReset (epoch millis)
+	resetDate := ""
+	if len(usageResp.UsageBreakdownList) > 0 && usageResp.UsageBreakdownList[0].NextDateReset != nil {
+		epochMs := *usageResp.UsageBreakdownList[0].NextDateReset
+		resetDate = time.Unix(int64(epochMs)/1000, 0).UTC().Format("2006-01-02")
+	}
+
 	result := map[string]interface{}{
-		"tier_id":       limits.TierID,
-		"monthly_usage": limits.MonthlyUsage,
-		"daily_usage":   limits.DailyUsage,
-		"limits":        limits.Limits,
+		"usage_used":          usageUsed,
+		"usage_limit":         usageLimit,
+		"subscription_type":   subscriptionType,
+		"subscription_title":  subscriptionTitle,
+		"days_until_reset":    usageResp.DaysUntilReset,
+		"reset_date":          resetDate,
+		"raw":                 usageResp,
+	}
+
+	if usageResp.UserInfo != nil {
+		result["email"] = usageResp.UserInfo.Email
 	}
 
 	return result, nil

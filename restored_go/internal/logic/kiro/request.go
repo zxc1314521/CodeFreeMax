@@ -132,7 +132,17 @@ func (s *sKiro) buildKiroRequest(
 	//   Each message has: role(0x00), role_len(0x08), content_type(0x10),
 	//                     content_data(0x18), extra1(0x20), extra2(0x28)
 	// ========================================================================
-	messages, _ := requestData["messages"].([]interface{})
+	// Support both []interface{} and []map[string]interface{} — Go type assertions
+	// require exact type match, so we must handle both forms.
+	var messages []interface{}
+	if m, ok := requestData["messages"].([]interface{}); ok {
+		messages = m
+	} else if m2, ok := requestData["messages"].([]map[string]interface{}); ok {
+		messages = make([]interface{}, len(m2))
+		for i, v := range m2 {
+			messages[i] = v
+		}
+	}
 
 	var kiroMessages []KiroMessage
 	var toolResults []KiroMessage // tool role messages get special handling
@@ -338,8 +348,15 @@ func (s *sKiro) buildKiroRequest(
 	// ========================================================================
 	conversationID := uuid.NewString()
 
+	// Use the extracted model for the top-level request (not hardcoded defaultModel).
+	// defaultModel ("MANUAL") is only the fallback when no model is specified.
+	requestModel := model
+	if requestModel == "" {
+		requestModel = defaultModel
+	}
+
 	request := &KiroRequest{
-		Model:          defaultModel,
+		Model:          requestModel,
 		ConversationID: conversationID,
 		ParentMessage:  parentMessage,
 		Messages:       kiroMessages,
@@ -537,12 +554,220 @@ func (s *sKiro) processTools(tools []interface{}) []KiroToolDef {
 			inputSchema = funcMap["input_schema"]
 		}
 
-		toolDefs = append(toolDefs, KiroToolDef{
-			Name:        name,
-			Description: description,
-			InputSchema: inputSchema,
-		})
+		toolDef := KiroToolDef{
+			ToolSpecification: &ToolSpecification{
+				Name:        name,
+				Description: description,
+			},
+		}
+		if inputSchema != nil {
+			toolDef.ToolSpecification.InputSchema = &ToolInputSchema{
+				JSON: inputSchema,
+			}
+		}
+
+		toolDefs = append(toolDefs, toolDef)
 	}
 
 	return toolDefs
+}
+
+// ============================================================================
+// buildGenerateAssistantRequest
+// ============================================================================
+
+// buildGenerateAssistantRequest transforms an OpenAI-compatible request into the
+// AWS Q Developer generateAssistantResponse format.
+//
+// The real Kiro API expects:
+//   POST /generateAssistantResponse
+//   {
+//     "conversationState": {
+//       "chatTriggerType": "MANUAL",
+//       "conversationId": "<uuid>",
+//       "currentMessage": {
+//         "userInputMessage": { "content": "...", "modelId": "...", "origin": "IDE" }
+//       },
+//       "history": [ { "userInputMessage": {...} }, { "assistantResponseMessage": {...} }, ... ]
+//     },
+//     "profileArn": ""
+//   }
+func (s *sKiro) buildGenerateAssistantRequest(
+	requestData map[string]interface{},
+	accountData map[string]interface{},
+) *GenerateAssistantRequest {
+	logger := gins.Log()
+
+	// Extract model and map to AWS Q model ID
+	model := ""
+	if m, ok := requestData["model"].(string); ok && m != "" {
+		model = m
+	}
+	if model == "" {
+		if m, ok := requestData["default_model"].(string); ok && m != "" {
+			model = m
+		}
+	}
+	// Map OpenAI model name to AWS Q model ID
+	qModelID := mapModelID(model)
+	logger.Infof(nil, "[Kiro] Model mapping: %q -> %q", model, qModelID)
+
+	// Extract system message(s) — collect from requestData and from messages
+	systemMessage := ""
+	if sysMsg, ok := requestData["system_message"]; ok && sysMsg != nil {
+		systemMessage = getContentText(sysMsg)
+	}
+
+	// Parse messages
+	var messages []interface{}
+	if m, ok := requestData["messages"].([]interface{}); ok {
+		messages = m
+	} else if m2, ok := requestData["messages"].([]map[string]interface{}); ok {
+		messages = make([]interface{}, len(m2))
+		for i, v := range m2 {
+			messages[i] = v
+		}
+	}
+
+	// Collect system messages from the messages array
+	for _, msg := range messages {
+		msgMap, ok := msg.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		role, _ := msgMap["role"].(string)
+		if role == "system" {
+			text := getContentText(msgMap["content"])
+			if systemMessage != "" {
+				systemMessage = systemMessage + "\n" + text
+			} else {
+				systemMessage = text
+			}
+		}
+	}
+
+	// Build history — real Kiro puts system prompt as history[0] userInputMessage
+	// followed by assistant reply "I will follow these instructions."
+	var history []HistoryMessage
+
+	if systemMessage != "" {
+		history = append(history, HistoryMessage{
+			UserInputMessage: &UserInputMessage{
+				Content: systemMessage,
+				ModelID: qModelID,
+				Origin:  "AI_EDITOR",
+			},
+		})
+		history = append(history, HistoryMessage{
+			AssistantResponseMessage: &AssistantResponseMessage{
+				Content: "I will follow these instructions.\n\nUnderstood.",
+			},
+		})
+	}
+
+	// Find the last user message index (skip system messages)
+	lastUserIdx := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		msgMap, ok := messages[i].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		role, _ := msgMap["role"].(string)
+		if role == "user" {
+			lastUserIdx = i
+			break
+		}
+	}
+
+	// Build history from non-system messages; last user message becomes currentMessage
+	var lastUserContent string
+	for i, msg := range messages {
+		msgMap, ok := msg.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		role, _ := msgMap["role"].(string)
+		content := msgMap["content"]
+
+		switch role {
+		case "system":
+			// Already handled above as history[0]+[1]
+		case "user":
+			text := getContentText(content)
+			if i == lastUserIdx {
+				lastUserContent = text
+			} else {
+				history = append(history, HistoryMessage{
+					UserInputMessage: &UserInputMessage{
+						Content: text,
+						ModelID: qModelID,
+						Origin:  "AI_EDITOR",
+					},
+				})
+			}
+		case "assistant":
+			text := getContentText(content)
+			history = append(history, HistoryMessage{
+				AssistantResponseMessage: &AssistantResponseMessage{
+					Content: text,
+				},
+			})
+		case "tool":
+			// Tool results — skip for now
+		}
+	}
+
+	// Fallback: if no user message found, use a placeholder
+	if lastUserContent == "" {
+		lastUserContent = "Hello"
+	}
+
+	// Process tools
+	var toolDefs []KiroToolDef
+	if tools, ok := requestData["tools"].([]interface{}); ok {
+		toolDefs = s.processTools(tools)
+	}
+
+	// Build userInputMessageContext — editorState is always required (even as empty {})
+	msgContext := &UserInputMessageContext{
+		EditorState: &EditorState{},
+	}
+	if len(toolDefs) > 0 {
+		msgContext.Tools = toolDefs
+	}
+
+	// Truncate history if needed
+	if truncationEnabled && len(history) > maxMessagesLimit {
+		logger.Warningf(nil, "[Kiro] History truncated from %d to %d",
+			len(history), maxMessagesLimit)
+		startIdx := len(history) - maxMessagesLimit
+		history = history[startIdx:]
+	}
+
+	conversationID := uuid.NewString()
+	agentContinuationID := uuid.NewString()
+
+	// profileArn: present for IDC/Pro users, absent for Builder ID users.
+	// AWS SDK's take() skips undefined values, so omitempty handles this correctly.
+	profileArn, _ := accountData["profile_arn"].(string)
+
+	return &GenerateAssistantRequest{
+		ConversationState: &ConversationState{
+			ChatTriggerType:     "MANUAL",
+			ConversationID:      conversationID,
+			AgentContinuationID: agentContinuationID,
+			AgentTaskType:       "vibe",
+			CurrentMessage: &CurrentMessage{
+				UserInputMessage: &UserInputMessage{
+					Content:                 lastUserContent,
+					ModelID:                 qModelID,
+					Origin:                  "AI_EDITOR",
+					UserInputMessageContext: msgContext,
+				},
+			},
+			History: history,
+		},
+		ProfileArn: profileArn,
+	}
 }

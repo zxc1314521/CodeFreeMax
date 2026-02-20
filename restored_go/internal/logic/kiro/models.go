@@ -2,243 +2,263 @@ package kiro
 
 // models.go — Data structures for the Kiro channel (AWS Q Developer API).
 //
-// Structures derived from buildKiroRequest (24160B @ 0x17a4e20) analysis:
-//   - KiroRequest: the final request sent to AWS Q API
-//   - KiroMessage: individual message in the conversation
-//   - KiroContent: content block within a message (text, thinking, tool_use)
-//   - KiroToolUse: tool use block structure
-//   - KiroStreamEvent: streaming response event
-//   - UsageLimits: usage tracking structure
-//
-// The request format follows the AWS Q Developer conversationMessage pattern:
-// {
-//   "conversationId": "uuid",
-//   "parentMessageId": "uuid",
-//   "message": {
-//     "role": "user",
-//     "content": "...",
-//     "context": {...}
-//   },
-//   "systemMessage": "...",
-//   "tools": [...],
-//   "dynamicHeaders": {...}
-// }
+// The real Kiro API uses the generateAssistantResponse endpoint with:
+//   Request: { conversationState: { chatTriggerType, conversationId, currentMessage, history }, profileArn? }
+//   Response: AWS Event Stream binary protocol with assistantResponseEvent, toolUseEvent, etc.
 
 // ============================================================================
-// Request Structures
+// Request Structures (generateAssistantResponse format)
 // ============================================================================
 
-// KiroRequest represents the complete request to the AWS Q Developer API.
-// Built by buildKiroRequest (24160B @ 0x17a4e20).
-//
-// Field offsets from decompiled newobject at end of buildKiroRequest:
-//   offset 0x00: role (ptr)          — "MANUAL" (6 bytes, DAT_01c41eb5 → 9 bytes)
-//   offset 0x08: role len
-//   offset 0x10: systemMessage (ptr)
-//   offset 0x18: systemMessage len
-//   offset 0x20: model (ptr)         — from uStack_648 / lStack_9c8
-//   offset 0x28: model len           — 6 (for "MANUAL")
-//   offset 0x30: conversationId      — from uuid.NewString()
-//   offset 0x38: conversationId len
-//   offset 0x40: parentMessage       — puStack_810 (the message object)
-//   offset 0x48: messages slice ptr
-//   offset 0x50: messages slice len
-//   offset 0x58: messages slice cap
-//   offset 0x60: context ptr         — from lStack0000000000000018 + 0x98
-//   offset 0x68: context len
+// GenerateAssistantRequest is the top-level request to generateAssistantResponse.
+// Real format: { conversationState: {...}, profileArn?: "..." }
+// For Builder ID users, profileArn is undefined (omitted).
+// For IDC/Pro users, profileArn is the IAM Identity Center profile ARN.
+type GenerateAssistantRequest struct {
+	ConversationState *ConversationState `json:"conversationState"`
+	ProfileArn        string             `json:"profileArn,omitempty"`
+}
+
+// ConversationState holds the conversation context.
+type ConversationState struct {
+	ChatTriggerType     string           `json:"chatTriggerType"`
+	ConversationID      string           `json:"conversationId"`
+	CurrentMessage      *CurrentMessage  `json:"currentMessage"`
+	History             []HistoryMessage `json:"history,omitempty"`
+	AgentContinuationID string           `json:"agentContinuationId,omitempty"`
+	AgentTaskType       string           `json:"agentTaskType,omitempty"`
+}
+
+// CurrentMessage wraps the user input message.
+type CurrentMessage struct {
+	UserInputMessage *UserInputMessage `json:"userInputMessage"`
+}
+
+// UserInputMessage is the actual user message content.
+type UserInputMessage struct {
+	Content                 string                   `json:"content"`
+	ModelID                 string                   `json:"modelId,omitempty"`
+	Origin                  string                   `json:"origin"`
+	UserInputMessageContext *UserInputMessageContext  `json:"userInputMessageContext,omitempty"`
+	Images                  []ImageBlock              `json:"images,omitempty"`
+}
+
+// UserInputMessageContext holds tools, tool results, and editor state for the current message.
+type UserInputMessageContext struct {
+	Tools       []KiroToolDef    `json:"tools,omitempty"`
+	ToolResults []KiroToolResult `json:"toolResults,omitempty"`
+	EditorState *EditorState     `json:"editorState,omitempty"`
+}
+
+// EditorState represents the editor state context (can be empty object {}).
+type EditorState struct {}
+
+// ImageBlock represents an image in a message.
+type ImageBlock struct {
+	Format string `json:"format"`
+	Source struct {
+		Bytes string `json:"bytes"` // base64 encoded
+	} `json:"source"`
+}
+
+// HistoryMessage is a message in the conversation history.
+// Can be either userInputMessage or assistantResponseMessage.
+type HistoryMessage struct {
+	UserInputMessage         *UserInputMessage         `json:"userInputMessage,omitempty"`
+	AssistantResponseMessage *AssistantResponseMessage  `json:"assistantResponseMessage,omitempty"`
+}
+
+// AssistantResponseMessage represents an assistant response in history.
+type AssistantResponseMessage struct {
+	Content   string `json:"content"`
+	MessageID string `json:"messageId,omitempty"`
+}
+
+// KiroToolDef represents a tool definition in the Kiro API format.
+// The API wraps tool specs in { toolSpecification: { name, description, inputSchema: { json: ... } } }
+type KiroToolDef struct {
+	ToolSpecification *ToolSpecification `json:"toolSpecification,omitempty"`
+}
+
+// ToolSpecification is the inner tool spec.
+type ToolSpecification struct {
+	Name        string           `json:"name"`
+	Description string           `json:"description,omitempty"`
+	InputSchema *ToolInputSchema `json:"inputSchema,omitempty"`
+}
+
+// ToolInputSchema wraps the JSON schema for a tool's input.
+type ToolInputSchema struct {
+	JSON interface{} `json:"json,omitempty"`
+}
+
+// KiroToolResult represents a tool result.
+type KiroToolResult struct {
+	Content   []ToolResultContent `json:"content"`
+	Status    string              `json:"status"`
+	ToolUseID string              `json:"toolUseId"`
+}
+
+// ToolResultContent is the content of a tool result.
+type ToolResultContent struct {
+	Text string `json:"text"`
+}
+
+// ============================================================================
+// Internal Request Structures (buildKiroRequest output)
+// ============================================================================
+
+// KiroRequest is the internal request structure produced by buildKiroRequest.
+// It is serialized to JSON and sent to the AWS Q Developer chat endpoint.
 type KiroRequest struct {
-	// Model is the model identifier (e.g. "MANUAL", or mapped model name)
-	// From decompiled: puVar11[7] = &DAT_01c41eb5 ("streaming"), puVar11[8] = 9
-	// Actually: role field at offset 0x20-0x28 stores model name
-	Model    string `json:"model"`
-	ModelLen int    `json:"-"`
-
-	// SystemMessage is the concatenated system prompt
-	// From decompiled: pauStack_6a0 accumulates system messages via concatstring2
-	// Truncated to maxSystemMessageLen (8000) if DAT_02e5d6d9 != 0
-	SystemMessage string `json:"systemMessage,omitempty"`
-
-	// ConversationID is a UUID for the conversation
-	// From decompiled: github_com_google_uuid_NewString() at line 3219
-	ConversationID string `json:"conversationId"`
-
-	// ParentMessage is the constructed parent message object
-	// From decompiled: puStack_810 = runtime_newobject() at line 2939
-	ParentMessage *KiroParentMessage `json:"parentMessage"`
-
-	// Messages is the array of conversation messages
-	// From decompiled: pauStack_978 (len), pauStack_970 (cap), pauStack_5f0 (ptr)
-	Messages []KiroMessage `json:"messages"`
-
-	// Context is optional additional context
-	// From decompiled: lStack0000000000000018 + 0x98/0xa0
-	Context interface{} `json:"context,omitempty"`
-
-	// Tools is the list of available tools
-	// From decompiled: pauStack_ac8 (tools slice)
-	Tools []KiroToolDef `json:"tools,omitempty"`
+	Model          string              `json:"model"`
+	ConversationID string              `json:"conversationId"`
+	ParentMessage  *KiroParentMessage  `json:"parentMessage"`
+	Messages       []KiroMessage       `json:"messages"`
+	Context        interface{}         `json:"context,omitempty"`
+	Tools          []KiroToolDef       `json:"tools,omitempty"`
 }
 
-// KiroParentMessage represents the parent message in the request.
-// From decompiled: runtime_newobject() at line 2939, fields set at lines 2940-2960.
-//
-// Field offsets:
-//   0x00: role ptr           — from pauStack_5c0
-//   0x08: role len           — from pauStack_920
-//   0x10: systemMessage ptr  — from pauStack_5c8 (if uStack_930 != 0)
-//   0x18: systemMessage len
-//   0x20: model ptr          — from uStack_648
-//   0x28: model len          — from lStack_9c8
-//   0x30: type ptr           — "streaming" (DAT_01c41eb5, 9 bytes)
-//   0x38: type len           — 9
-//   0x40: headers map        — plStack_818 (from runtime_makemap_small)
-//   0x48: headers map ptr
+// KiroParentMessage is the parent message metadata in a KiroRequest.
 type KiroParentMessage struct {
-	// Role is the message role
-	// From decompiled: pauStack_5c0 / pauStack_920
-	// Default: "MANUAL" (8 bytes at DAT_01c3ffa7) if pauStack_920 == 0 && pauStack_940 == 0
-	// Or: 22-byte string (DAT_01c5a6df) if pauStack_940 != 0
-	Role string `json:"role"`
-
-	// SystemMessage is the system prompt for this message
-	SystemMessage string `json:"systemMessage,omitempty"`
-
-	// Model is the model name
-	Model    string `json:"model"`
-	ModelLen int    `json:"-"`
-
-	// Type is the request type, always "streaming"
-	// From decompiled: puVar11[7] = &DAT_01c41eb5, puVar11[8] = 9
-	Type string `json:"type"`
-
-	// Headers is a map of dynamic headers
-	// From decompiled: plStack_818 = runtime_makemap_small()
-	Headers map[string]interface{} `json:"headers,omitempty"`
+	Role          string                 `json:"role"`
+	Model         string                 `json:"model"`
+	Type          string                 `json:"type"`
+	Headers       map[string]interface{} `json:"headers,omitempty"`
+	SystemMessage string                 `json:"systemMessage,omitempty"`
 }
 
-// KiroMessage represents a single message in the conversation.
-// From decompiled: the message struct is 0x30 (48) bytes, iterated in buildKiroRequest.
-//
-// Struct layout (0x30 bytes per message):
-//   0x00: role ptr
-//   0x08: role len
-//   0x10: content type ptr (interface type)
-//   0x18: content data ptr (interface data)
-//   0x20: extra field 1 (padding/flags)
-//   0x28: extra field 2 (padding/flags)
+// KiroMessage represents a single message in the KiroRequest messages array.
+// Content can be a plain string or a []interface{} of content blocks.
 type KiroMessage struct {
-	// Role is the message role: "user", "assistant", "system", "tool"
-	Role string `json:"role"`
-
-	// Content can be a string or array of content blocks
-	// From decompiled: content type checked against DAT_0192e960 (slice) and DAT_0194e220 (string)
+	Role    string      `json:"role"`
 	Content interface{} `json:"content"`
 }
 
-// KiroContentBlock represents a content block within a message.
-// From decompiled: mapaccess1_faststr checks for "type", "text", "thinking", "tool_use"
-//
-// Content block types found in buildKiroRequest:
-//   "text"     — 0x74786574 (4 bytes) at line 1049, 2688
-//   "thinking" — 0x676e696b6e696874 (8 bytes) at line 1097, 2736
-//   "tool_use" — 0x6573755f6c6f6f74 (8 bytes) at line 2825
-type KiroContentBlock struct {
-	Type  string      `json:"type"`
-	Text  string      `json:"text,omitempty"`
-	ID    string      `json:"id,omitempty"`
-	Name  string      `json:"name,omitempty"`
-	Input interface{} `json:"input,omitempty"`
-}
-
-// KiroToolDef represents a tool definition in the request.
-// From decompiled: tool processing loop at lines 2962-3119
-// Each tool is 0x38 (56) bytes in the slice.
-//
-// Tool struct layout (0x38 bytes):
-//   0x00: name ptr
-//   0x08: name len
-//   0x10: description ptr
-//   0x18: description len
-//   0x20: input_schema ptr
-//   0x28: input_schema len
-//   0x30: extra fields
-type KiroToolDef struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description,omitempty"`
-	InputSchema interface{} `json:"input_schema,omitempty"`
-}
-
 // ============================================================================
-// Tool Result Structures
+// AWS Event Stream Response Structures
 // ============================================================================
 
-// KiroToolResult represents a tool result message.
-// From decompiled: role == "tool" (0x6c6f6f74) branch at line 376
-// Creates a map with:
-//   "type" → PTR_DAT_01f3a180 (tool result type)
-//   "tool_use_id" → from content (11 bytes key, mapassign_faststr(0xb))
-//   "content" → from message content (7 bytes key, DAT_01c3dd44)
-type KiroToolResult struct {
-	Type      string `json:"type"`
-	ToolUseID string `json:"tool_use_id"`
-	Content   string `json:"content"`
+// EventStreamMessage represents a parsed AWS Event Stream binary message.
+type EventStreamMessage struct {
+	EventType   string
+	ContentType string
+	MessageType string
+	Payload     []byte
+	TotalLength uint32
+	NextOffset  int
 }
 
-// ============================================================================
-// Response / Stream Structures
-// ============================================================================
-
-// KiroStreamEvent represents a streaming response event from AWS Q.
-// From decompiled: ParseStreamResponse (224B @ 0x17aac80) and extractContent (736B @ 0x17aaf00)
-type KiroStreamEvent struct {
-	// Type is the event type
-	Type string `json:"type,omitempty"`
-
-	// Content is the text content delta
-	Content string `json:"content,omitempty"`
-
-	// StopReason indicates why generation stopped
-	StopReason string `json:"stop_reason,omitempty"`
-
-	// Usage contains token usage information
-	Usage *KiroUsage `json:"usage,omitempty"`
-
-	// ToolUse contains tool call information
-	ToolUse *KiroToolUseEvent `json:"tool_use,omitempty"`
+// AssistantResponseEvent is the payload of an assistantResponseEvent.
+type AssistantResponseEvent struct {
+	Content string `json:"content"`
 }
 
-// KiroToolUseEvent represents a tool use event in the stream.
+// ToolUseEvent is the payload of a toolUseEvent.
+type ToolUseEvent struct {
+	Name      string `json:"name"`
+	ToolUseID string `json:"toolUseId"`
+	Input     string `json:"input"`
+	Stop      bool   `json:"stop"`
+}
+
+// MeteringEvent is the payload of a meteringEvent.
+type MeteringEvent struct {
+	Usage int    `json:"usage"`
+	Unit  string `json:"unit"`
+}
+
+// MessageMetadataEvent is the payload of a messageMetadataEvent.
+type MessageMetadataEvent struct {
+	ConversationID string `json:"conversationId"`
+}
+
+// ReasoningContentEvent is the payload of a reasoningContentEvent.
+type ReasoningContentEvent struct {
+	Text          string `json:"text"`
+	ReasoningText string `json:"reasoningText"`
+}
+
+// FollowupPromptEvent is the payload of a followupPromptEvent.
+type FollowupPromptEvent struct {
+	FollowupPrompt string `json:"followupPrompt"`
+}
+
+// KiroToolUseEvent represents a tool use event being accumulated during streaming.
 type KiroToolUseEvent struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Input string `json:"input"`
+	ID    string
+	Name  string
+	Input string
 }
 
 // KiroUsage represents token usage information.
 type KiroUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens  int
+	OutputTokens int
 }
 
 // ============================================================================
-// Usage Limits Structures
+// Usage Limits Structures (CodeWhisperer API)
 // ============================================================================
 
-// UsageLimits represents the usage limits for a Kiro account.
-// From decompiled: getUsageLimits (2176B @ 0x17a20e0) and GetUsageInfo (320B @ 0x17a2960)
+// CodeWhispererUsageResponse represents the response from
+// https://codewhisperer.us-east-1.amazonaws.com/getUsageLimits
+type CodeWhispererUsageResponse struct {
+	DaysUntilReset     *int                    `json:"daysUntilReset,omitempty"`
+	NextDateReset      *float64                `json:"nextDateReset,omitempty"`
+	UserInfo           *CWUserInfo             `json:"userInfo,omitempty"`
+	SubscriptionInfo   *CWSubscriptionInfo     `json:"subscriptionInfo,omitempty"`
+	UsageBreakdownList []CWUsageBreakdown      `json:"usageBreakdownList,omitempty"`
+	OverageConfig      *CWOverageConfiguration `json:"overageConfiguration,omitempty"`
+}
+
+type CWUserInfo struct {
+	Email  string `json:"email,omitempty"`
+	UserID string `json:"userId,omitempty"`
+}
+
+type CWSubscriptionInfo struct {
+	SubscriptionTitle string `json:"subscriptionTitle,omitempty"`
+	Type              string `json:"type,omitempty"`
+}
+
+type CWOverageConfiguration struct {
+	OverageStatus string `json:"overageStatus,omitempty"`
+}
+
+type CWUsageBreakdown struct {
+	UsageLimit                 *int            `json:"usageLimit,omitempty"`
+	CurrentUsage               *int            `json:"currentUsage,omitempty"`
+	UsageLimitWithPrecision    *float64        `json:"usageLimitWithPrecision,omitempty"`
+	CurrentUsageWithPrecision  *float64        `json:"currentUsageWithPrecision,omitempty"`
+	NextDateReset              *float64        `json:"nextDateReset,omitempty"`
+	FreeTrialInfo              *CWFreeTrialInfo `json:"freeTrialInfo,omitempty"`
+	Bonuses                    []CWBonusInfo   `json:"bonuses,omitempty"`
+	DisplayName                string          `json:"displayName,omitempty"`
+	ResourceType               string          `json:"resourceType,omitempty"`
+	Unit                       string          `json:"unit,omitempty"`
+}
+
+type CWFreeTrialInfo struct {
+	UsageLimit   *int    `json:"usageLimit,omitempty"`
+	CurrentUsage *int    `json:"currentUsage,omitempty"`
+	Status       string  `json:"freeTrialStatus,omitempty"`
+}
+
+type CWBonusInfo struct {
+	BonusCode   string   `json:"bonusCode,omitempty"`
+	DisplayName string   `json:"displayName,omitempty"`
+	UsageLimit  *float64 `json:"usageLimit,omitempty"`
+	CurrentUsage *float64 `json:"currentUsage,omitempty"`
+	Status      string   `json:"status,omitempty"`
+}
+
+// UsageLimits is kept for backward compatibility with buildUsageLimitsHeaders in chat.go
 type UsageLimits struct {
-	// TierID is the account tier identifier
-	// From decompiled: "tierId" key in response (6 bytes)
-	TierID string `json:"tierId,omitempty"`
-
-	// MonthlyUsage tracks per-month usage
+	TierID       string         `json:"tierId,omitempty"`
 	MonthlyUsage map[string]int64 `json:"monthlyUsage,omitempty"`
-
-	// DailyUsage tracks per-day usage
-	DailyUsage map[string]int64 `json:"dailyUsage,omitempty"`
-
-	// Limits contains the configured limits
-	Limits map[string]int64 `json:"limits,omitempty"`
+	DailyUsage   map[string]int64 `json:"dailyUsage,omitempty"`
+	Limits       map[string]int64 `json:"limits,omitempty"`
 }
 
 // ============================================================================

@@ -1,0 +1,6 @@
+<template>
+  <div class="config-view">
+    <div class="page-header">
+      <h1>配置管理</h1>
+      <p>管理系统基础配置、负载均衡、授权等设置</p>
+    </div>

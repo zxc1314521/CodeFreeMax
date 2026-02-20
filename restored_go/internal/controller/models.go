@@ -2,6 +2,7 @@ package controller
 
 import (
 	"kiro2api/internal/dao"
+	"kiro2api/internal/logic/kiro"
 
 	"github.com/gogf/gf/v2/net/ghttp"
 )
@@ -72,6 +73,34 @@ func RegisterModelsRoute(r *ghttp.Request) {
 
 	// Build channel_models map: channel_name -> model_name mapping
 	channelModels := make(map[string]string)
+
+	// Append dynamically discovered Kiro models from AWS ListAvailableModels API
+	awsModels, awsDefault := kiro.GetCachedModels()
+	for _, am := range awsModels {
+		// Skip if already in the list
+		found := false
+		for _, existing := range models {
+			if existing["id"] == am.ModelID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			models = append(models, map[string]interface{}{
+				"id":                    am.ModelID,
+				"max_completion_tokens": 0,
+				"max_prompt_tokens":     0,
+				"context_window_tokens": 200000,
+				"owned_by":              "kiro",
+				"description":           am.Description,
+				"supports":              []string{"chat", "code", "edit", "complete"},
+			})
+			channelModels[am.ModelID] = "kiro"
+		}
+	}
+	if awsDefault != nil && defaultModel == "" {
+		defaultModel = awsDefault.ModelID
+	}
 	// Build model_details map: model_name -> detail
 	modelDetails := make(map[string]map[string]interface{})
 
@@ -105,4 +134,36 @@ func RegisterModelsRoute(r *ghttp.Request) {
 	}
 
 	r.Response.WriteJson(response)
+}
+
+// RegisterChannelModelsRoute handles GET /{channel}/v1/models — returns enabled models for a specific channel.
+func RegisterChannelModelsRoute(r *ghttp.Request, channel string) {
+	ctx := r.Context()
+
+	channelModels, err := dao.ChannelModelList(ctx, channel)
+	if err != nil {
+		r.Response.WriteJson(map[string]interface{}{
+			"object": "list",
+			"data":   []interface{}{},
+		})
+		return
+	}
+
+	models := make([]map[string]interface{}, 0, len(channelModels))
+	for _, cm := range channelModels {
+		if !cm.Enabled {
+			continue
+		}
+		models = append(models, map[string]interface{}{
+			"id":       cm.ModelID,
+			"object":   "model",
+			"created":  1700000000,
+			"owned_by": cm.OwnedBy,
+		})
+	}
+
+	r.Response.WriteJson(map[string]interface{}{
+		"object": "list",
+		"data":   models,
+	})
 }

@@ -60,6 +60,7 @@ package kiro
 //   - generateMachineId       (320B  @ 0x17a3440) — Machine ID generation
 
 import (
+	"strings"
 	"sync"
 
 	"kiro2api/internal/logic"
@@ -78,6 +79,12 @@ const (
 	// AWS Q API base URL
 	// Updated: Kiro uses the Q Developer endpoint, not the legacy codewhisperer endpoint
 	awsQAPIBase = "https://q.us-east-1.amazonaws.com"
+
+	// CodeWhisperer API base URL for usage limits
+	codeWhispererAPIBase = "https://codewhisperer.us-east-1.amazonaws.com"
+
+	// Default profileArn for Social accounts
+	defaultProfileArn = "arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK"
 
 	// Kiro auth base URL
 	// Updated: Kiro uses its own OAuth PKCE auth service, not AWS IDC OIDC
@@ -106,7 +113,109 @@ const (
 
 	// Token refresh interval
 	tokenRefreshBufferSec = 300 // 5 minutes before expiry
+
+	// Default Kiro model ID (user-friendly format that AWS Q API accepts)
+	defaultKiroModelName = "claude-opus-4.6"
+
+	// Q client namespace prefix (from Kiro source: formatModelIdentifier2)
+	qClientNamespace = "qdev"
 )
+
+// modelNameMapping maps various model name inputs to the model ID
+// that gets sent as userInputMessage.modelId in the AWS Q API request.
+// AWS Q API accepts user-friendly names (lowercase with dashes/dots).
+// Internal AWS IDs like "CLAUDE_SONNET_4_20250514_V1_0" cause HTTP 400.
+var modelNameMapping = map[string]string{
+	// Claude Opus 4.6 (latest, from real Kiro dump)
+	"claude-opus-4.6":                      "claude-opus-4.6",
+	"claude-opus-4-6":                      "claude-opus-4.6",
+	"claude-4.6-opus":                      "claude-opus-4.6",
+	"opus-4.6":                             "claude-opus-4.6",
+	"opus-4-6":                             "claude-opus-4.6",
+
+	// Claude Opus 4
+	"claude-opus-4":                        "claude-opus-4",
+	"claude-4-opus":                        "claude-opus-4",
+	"opus-4":                               "claude-opus-4",
+
+	// Claude Sonnet 4.5
+	"claude-sonnet-4-5":                    "claude-sonnet-4.5",
+	"claude-sonnet-4.5":                    "claude-sonnet-4.5",
+	"claude-4.5-sonnet":                    "claude-sonnet-4.5",
+	"sonnet-4.5":                           "claude-sonnet-4.5",
+	"sonnet-4-5":                           "claude-sonnet-4.5",
+	"CLAUDE_SONNET_4_5_20250715_V1_0":      "claude-sonnet-4.5",
+
+	// Claude Sonnet 4
+	"claude-sonnet-4":                      "claude-sonnet-4",
+	"claude-4-sonnet":                      "claude-sonnet-4",
+	"sonnet-4":                             "claude-sonnet-4",
+	"CLAUDE_SONNET_4_20250514_V1_0":        "claude-sonnet-4",
+
+	// Claude Haiku 4.5
+	"claude-haiku-4-5":                     "claude-haiku-4.5",
+	"claude-haiku-4.5":                     "claude-haiku-4.5",
+	"claude-4.5-haiku":                     "claude-haiku-4.5",
+	"haiku-4.5":                            "claude-haiku-4.5",
+	"haiku-4-5":                            "claude-haiku-4.5",
+	"CLAUDE_HAIKU_4_5_20250715_V1_0":       "claude-haiku-4.5",
+
+	// Claude 3.7 Sonnet
+	"claude-3.7-sonnet":                    "claude-3.7-sonnet",
+	"claude-3-7-sonnet":                    "claude-3.7-sonnet",
+	"sonnet-3.7":                           "claude-3.7-sonnet",
+	"CLAUDE_3_7_SONNET_20250219_V1_0":      "claude-3.7-sonnet",
+
+	// Fast model
+	"simple-task": "simple-task",
+}
+
+// mapModelID converts any model name input to the user-friendly model name
+// that AWS Q API expects in userInputMessage.modelId.
+// AWS Q API requires user-friendly names like "claude-sonnet-4.5";
+// internal AWS IDs like "CLAUDE_SONNET_4_5_20250715_V1_0" cause HTTP 400.
+func mapModelID(model string) string {
+	// Strip qdev:: prefix if someone passes it in
+	if strings.HasPrefix(model, qClientNamespace+"::") {
+		model = strings.TrimPrefix(model, qClientNamespace+"::")
+	}
+
+	// Normalize: spaces → dashes, trim whitespace
+	model = strings.TrimSpace(model)
+	model = strings.ReplaceAll(model, " ", "-")
+
+	// 1. Check static mapping (exact match)
+	if qModel, ok := modelNameMapping[model]; ok {
+		return qModel
+	}
+
+	// 1b. Check static mapping (case-insensitive)
+	lowerModel := strings.ToLower(model)
+	if qModel, ok := modelNameMapping[lowerModel]; ok {
+		return qModel
+	}
+
+	// 2. Check if model matches a dynamically discovered model
+	cachedModelsMu.RLock()
+	for _, am := range cachedModels {
+		if strings.EqualFold(model, am.ModelID) || strings.EqualFold(model, am.ModelName) {
+			cachedModelsMu.RUnlock()
+			if am.ModelName != "" {
+				return am.ModelName
+			}
+			return am.ModelID
+		}
+	}
+	cachedModelsMu.RUnlock()
+
+	// 3. If it already looks like a user-friendly name (lowercase with dashes), use as-is
+	if strings.Contains(model, "-") && strings.ToLower(model) == model {
+		return model
+	}
+
+	// 4. Default
+	return defaultKiroModelName
+}
 
 // ============================================================================
 // Role Constants (from hex literals in decompiled code)

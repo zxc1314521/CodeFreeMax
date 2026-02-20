@@ -1,28 +1,7 @@
 package claudeapi
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"fmt"
-	"log"
-	"net/http"
-	"net/url"
-	"strings"
 	"sync"
-	"time"
-
-	"kiro2api/internal/common"
-	"kiro2api/internal/dao"
-	"kiro2api/internal/gate"
-	"kiro2api/internal/model"
-	"kiro2api/internal/proxy"
-
-	"github.com/gogf/gf/v2/encoding/gjson"
-	"github.com/gogf/gf/v2/frame/gins"
-	"github.com/gogf/gf/v2/net/ghttp"
-	"github.com/imroc/req/v3"
-	pkce "github.com/nirasan/go-oauth-pkce-code-verifier"
 )
 
 // sClaudeApi is the singleton service for Claude API channel logic.

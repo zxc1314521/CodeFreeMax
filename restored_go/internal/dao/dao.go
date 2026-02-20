@@ -32,15 +32,68 @@ func GetDB() *gorm.DB {
 // Config DAO
 // ============================================================================
 
-// ConfigDaoSetBatch saves a batch of config key-value pairs.
+// SystemConfig represents a key-value config row in the database.
+type SystemConfig struct {
+	Key   string `gorm:"column:config_key;primaryKey;size:255" json:"config_key"`
+	Value string `gorm:"column:config_value;type:text" json:"config_value"`
+}
+
+func (SystemConfig) TableName() string { return "system_config" }
+
+// MigrateSystemConfig creates the system_config table if it doesn't exist.
+func MigrateSystemConfig(database *gorm.DB) {
+	if err := database.AutoMigrate(&SystemConfig{}); err != nil {
+		log.Printf("[ConfigDao] AutoMigrate failed: %v", err)
+	}
+}
+
+// ConfigDaoSetBatch saves a batch of config key-value pairs (upsert).
 func ConfigDaoSetBatch(ctx context.Context, configMap map[string]string) error {
 	log.Printf("[ConfigDao] SetBatch: %d items", len(configMap))
+	for k, v := range configMap {
+		var existing SystemConfig
+		result := db.Where("config_key = ?", k).First(&existing)
+		if result.Error == gorm.ErrRecordNotFound {
+			// Insert new row
+			if err := db.Create(&SystemConfig{Key: k, Value: v}).Error; err != nil {
+				return err
+			}
+		} else if result.Error != nil {
+			return result.Error
+		} else {
+			// Update existing row
+			if err := db.Model(&SystemConfig{}).Where("config_key = ?", k).Update("config_value", v).Error; err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
 // ConfigDaoGet retrieves a config value by key.
 func ConfigDaoGet(ctx context.Context, key string) (string, error) {
-	return "", nil
+	var row SystemConfig
+	result := db.Where("config_key = ?", key).First(&row)
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			return "", nil
+		}
+		return "", result.Error
+	}
+	return row.Value, nil
+}
+
+// ConfigDaoGetAll retrieves all config key-value pairs.
+func ConfigDaoGetAll(ctx context.Context) (map[string]string, error) {
+	var rows []SystemConfig
+	if err := db.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	result := make(map[string]string, len(rows))
+	for _, r := range rows {
+		result[r.Key] = r.Value
+	}
+	return result, nil
 }
 
 // ============================================================================

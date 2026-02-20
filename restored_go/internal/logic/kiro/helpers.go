@@ -215,35 +215,14 @@ func (s *sKiro) checkOutboundIPOnce() {
 // ============================================================================
 
 // buildDynamicHeaders builds the dynamic headers map for Kiro API requests.
-// Updated: Includes Kiro-specific headers from source analysis:
-//   - x-amzn-kiro-agent-mode: agent mode identifier
-//   - x-amzn-codewhisperer-optout: opt-out flag
-//   - x-kiro-machineid: machine identifier
-//   - x-machine-id: legacy machine ID
+// From real Kiro client analysis: the SDK only adds Authorization, Content-Type,
+// User-Agent, x-amzn-kiro-agent-mode, and x-amzn-codewhisperer-optout.
+// These core headers are now set directly in ChatCompletions, so this function
+// only returns additional headers if needed.
 func (s *sKiro) buildDynamicHeaders(account map[string]interface{}) map[string]string {
 	headers := make(map[string]string)
-
-	// Kiro-specific headers (from Kiro source analysis)
-	headers["x-amzn-kiro-agent-mode"] = "none"
-	headers["x-amzn-codewhisperer-optout"] = "false"
-	headers["x-kiro-machineid"] = s.machineID
-
-	// Legacy machine ID header
-	headers["x-machine-id"] = s.machineID
-
-	// Outbound IP header (if detected)
-	if s.outboundIP != "" {
-		headers["x-outbound-ip"] = s.outboundIP
-	}
-
-	// Timestamp header
-	headers["x-request-time"] = fmt.Sprintf("%d", time.Now().Unix())
-
-	// Region header from account
-	if region, ok := account["region"].(string); ok && region != "" {
-		headers["x-region"] = region
-	}
-
+	// Core headers are set directly on the request in ChatCompletions.
+	// This function is kept for any future account-specific header needs.
 	return headers
 }
 
